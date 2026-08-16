@@ -7,33 +7,37 @@
 # Boiler: Intergas 28/24 cW4 (modulating condensing combi)
 #
 # Design:
-#   This device is intentionally a "dumb but reliable" OpenTherm bridge. It
-#   exposes every boiler sensor/switch/number to Home Assistant and does NOT
-#   run its own room-temperature PID loop — there's no room sensor on this
-#   device. The CH flow setpoint (number.ch_setpoint below) is meant to be
-#   driven by outdoor-temperature weather compensation on the HA side (see
-#   home_assistant/blueprints/opentherm_weather_compensation.yaml), which is
-#   the correct control strategy for a modulating condensing boiler and the
-#   single biggest lever for gas savings: it keeps the boiler modulating at
-#   the lowest flow temperature that still heats the house, maximizing
-#   condensing efficiency, instead of cycling on/off against a room stat.
+#   Everything — the room-led control loop, the weather-compensation
+#   bounds, and the condensing clamp — runs on this device. Home Assistant
+#   is used only as a data source (it supplies the room and outdoor
+#   temperature readings via the `homeassistant` sensor platform below);
+#   no HA automation or blueprint is required for the thermostat to work.
 #
-#   The external DS18B20 on the CV return line lets you (and the HA
-#   automation) verify/enforce that the boiler is actually condensing
-#   (return temp low enough), independent of whatever the boiler itself
-#   reports over OpenTherm.
+#   Control strategy: a PID climate (`ch_climate`) targets your room
+#   temperature — normal room-led thermostat behaviour, exposed to Home
+#   Assistant as a native climate entity/card. Its output doesn't drive the
+#   OpenTherm CH setpoint directly, though: it passes through a template
+#   output (`ch_pid_scaling_output`) that, on every control cycle,
+#   recomputes an outdoor-temperature-based ceiling for the flow setpoint
+#   (a classic weather-compensation curve) and trims it down further if the
+#   external CV return-line sensor shows the boiler isn't condensing. That
+#   keeps a modulating condensing boiler like the Intergas cW4 running at
+#   the lowest flow temperature the weather and the room both allow —
+#   the single biggest lever for gas savings — while still responding to
+#   actual room temperature like a normal thermostat.
 #
 #   Backup control (works without Home Assistant):
 #     1. ESPHome's built-in web_server — a local web UI on the device's IP,
-#        reachable from any browser on your LAN, to toggle heating/DHW and
-#        set temperatures even if HA is down.
+#        reachable from any browser on your LAN, including the thermostat
+#        card, even if HA is down.
 #     2. A physical push-button (optional, you wire it yourself) that
-#        toggles central heating on/off directly on the device — no WiFi,
-#        no HA, no cloud required.
+#        toggles the heating climate on/off directly on the device — no
+#        WiFi, no HA, no cloud required.
 #     3. An on-device watchdog: if the Home Assistant API connection drops
-#        for longer than ha_disconnect_backup_delay, the device falls back
-#        to a safe fixed CH setpoint automatically so the house doesn't go
-#        cold while you fix HA.
+#        for longer than ha_disconnect_backup_delay, the device stops the
+#        PID loop and forces a safe fixed CH setpoint so the house doesn't
+#        go cold while you fix HA (the room/outdoor readings come from HA,
+#        so the control loop can't run meaningfully without it anyway).
 
 substitutions:
   name: opentherm-thermostat
@@ -54,13 +58,16 @@ substitutions:
   # — double check against your board's silkscreen before wiring.
   backup_button_pin: "4"
 
-  # Central heating (CH) flow setpoint range written by Home Assistant.
-  # Kept wide so the weather-compensation automation has room to modulate
-  # low (condensing) on mild days and higher on cold days.
+  # Existing Home Assistant entities the on-device control loop reads.
+  # REPLACE these with your actual entity IDs before flashing.
+  room_temperature_entity_id: "sensor.YOUR_ROOM_TEMPERATURE_SENSOR"
+  outdoor_temperature_entity_id: "sensor.YOUR_OUTDOOR_TEMPERATURE_SENSOR"
+
+  # Central heating (CH) flow setpoint range ever sent to the boiler.
   ch_min_setpoint: "20"
   ch_max_setpoint: "80"
-  # Safe fallback CH setpoint used only by the HA-disconnect watchdog and
-  # the physical backup button — deliberately modest, not a design-day value.
+  # Safe fallback CH setpoint used only by the HA-disconnect watchdog —
+  # deliberately modest, not a design-day value.
   ch_fallback_setpoint: "45"
 
   # Domestic hot water (DHW) setpoint range/default for the cW4's instant DHW.
@@ -68,14 +75,31 @@ substitutions:
   dhw_max_setpoint: "65"
   dhw_default_setpoint: "60"
 
-  # Return-water temperature below which the boiler is considered to be
-  # condensing (flue gas condenses, recovering extra latent heat). Intergas
-  # cW4 condenses noticeably below ~55°C return; this is a diagnostic
-  # threshold only, used for the "Condensing Mode Active" indicator.
+  # Weather-compensation curve: outdoor temperature -> allowed flow-setpoint
+  # ceiling for the room PID loop. min_flow_temp is the constant floor
+  # (always allowed, for maximum condensing efficiency at low demand).
+  design_outdoor_temp: "-10"      # coldest outdoor temp you size for (NL design temp ~ -10°C)
+  design_flow_temp: "65"          # flow ceiling at design_outdoor_temp
+  heating_limit_outdoor_temp: "18"  # outdoor temp above which the ceiling drops to the floor
+  min_flow_temp: "22"             # flow ceiling at/above heating_limit_outdoor_temp, and the hard floor
+
+  # Condensing clamp, using the external CV return-line sensor. Below
+  # condensing_threshold the boiler is condensing (recovering extra heat
+  # from flue gas); if the return line runs hotter, the flow setpoint is
+  # trimmed down by condensing_trim_step to push it back into range.
   condensing_threshold: "55"
+  condensing_trim_step: "2"
+
+  # Room-led PID gains. Defaults are DIYLESS's field-tested starting point
+  # for this exact hardware/output combination — tune from here.
+  pid_kp: "0.77"
+  pid_ki: "0.0005"
+  default_room_target: "20"
+  room_min_temp: "12"
+  room_max_temp: "24"
 
   # How long the Home Assistant API connection must be down before the
-  # device engages its safe fallback CH setpoint.
+  # device stops the PID loop and engages its safe fallback CH setpoint.
   ha_disconnect_backup_delay: "15min"
 
 esphome:
@@ -101,7 +125,10 @@ api:
     - lambda: |-
         id(ha_connected).publish_state(true);
         id(backup_mode_indicator).publish_state(false);
-    - logger.log: "Home Assistant reconnected"
+    - climate.control:
+        id: ch_climate
+        mode: "HEAT"
+    - logger.log: "Home Assistant reconnected — resuming room-led control"
   on_client_disconnected:
     - lambda: id(ha_connected).publish_state(false);
     - logger.log:
@@ -124,8 +151,8 @@ wifi:
 
 captive_portal:
 
-# Local backup control surface — usable from any browser on the LAN even
-# when Home Assistant is unreachable.
+# Local backup control surface, including the thermostat card — usable
+# from any browser on the LAN even when Home Assistant is unreachable.
 web_server:
   version: 3
 
@@ -141,15 +168,18 @@ script:
       - delay: ${ha_disconnect_backup_delay}
       - logger.log:
           level: WARN
-          format: "Home Assistant still disconnected — engaging safe fallback CH setpoint (${ch_fallback_setpoint}°C)"
+          format: "Home Assistant still disconnected — stopping PID loop, engaging safe fallback CH setpoint (${ch_fallback_setpoint}°C)"
       - globals.set:
           id: backup_mode_active
           value: "true"
       - lambda: id(backup_mode_indicator).publish_state(true);
+      - climate.control:
+          id: ch_climate
+          mode: "OFF"
       - switch.turn_on: ch_enable
-      - number.set:
-          id: ch_setpoint
-          value: ${ch_fallback_setpoint}
+      - output.set_level:
+          id: ch_setpoint_output
+          level: !lambda 'return (${ch_fallback_setpoint} - ${ch_min_setpoint}) / (${ch_max_setpoint} - ${ch_min_setpoint});'
 
 # Enable OpenTherm communication with the boiler
 # https://esphome.io/components/opentherm.html
@@ -169,17 +199,7 @@ switch:
       restore_mode: RESTORE_DEFAULT_OFF
 
 number:
-  # Primary control surface for gas-saving weather compensation, driven
-  # from Home Assistant (see the weather_compensation blueprint).
   - platform: opentherm
-    t_set:
-      id: ch_setpoint
-      name: "Heating Flow Setpoint"
-      step: 0.5
-      min_value: ${ch_min_setpoint}
-      max_value: ${ch_max_setpoint}
-      restore_value: true
-      initial_value: ${ch_fallback_setpoint}
     t_dhw_set:
       id: dhw_setpoint
       name: "Hot Water Setpoint"
@@ -188,6 +208,87 @@ number:
       max_value: ${dhw_max_setpoint}
       restore_value: true
       initial_value: ${dhw_default_setpoint}
+
+output:
+  # The actual OpenTherm CH setpoint actuator. Not exposed to Home
+  # Assistant directly — everything writes to it through
+  # ch_pid_scaling_output below, which applies the dynamic weather/
+  # condensing bounds. min/max here are the full physical range; the
+  # narrower day-to-day range comes from the scaling output.
+  - platform: opentherm
+    t_set:
+      id: ch_setpoint_output
+      min_value: ${ch_min_setpoint}
+      max_value: ${ch_max_setpoint}
+      zero_means_zero: true
+
+  # Sits between the PID climate and the OpenTherm output. Takes the PID's
+  # normalized 0..1 demand level and maps it into an outdoor-temperature-
+  # bounded, condensing-clamped absolute flow setpoint each control cycle.
+  - platform: template
+    id: ch_pid_scaling_output
+    type: float
+    write_action:
+      - lambda: |-
+          float outdoor = id(outdoor_temperature).has_state()
+              ? id(outdoor_temperature).state
+              : (float) ${design_outdoor_temp};
+
+          float span = (float) ${heating_limit_outdoor_temp} - (float) ${design_outdoor_temp};
+          float ratio = (span != 0)
+              ? ((float) ${heating_limit_outdoor_temp} - outdoor) / span
+              : 0.0f;
+          ratio = std::max(0.0f, std::min(1.0f, ratio));
+
+          float floor = (float) ${min_flow_temp};
+          float ceiling = floor + ratio * ((float) ${design_flow_temp} - floor);
+
+          float target = floor + state * (ceiling - floor);
+
+          if (id(return_line_temperature).has_state() &&
+              id(return_line_temperature).state > (float) ${condensing_threshold}) {
+            target -= (float) ${condensing_trim_step};
+            target = std::max(target, floor);
+          }
+
+          float level = (target - (float) ${ch_min_setpoint}) /
+              ((float) ${ch_max_setpoint} - (float) ${ch_min_setpoint});
+          level = std::max(0.0f, std::min(1.0f, level));
+          id(ch_setpoint_output).set_level(level);
+
+climate:
+  - platform: pid
+    id: ch_climate
+    name: "Heating"
+    sensor: room_temperature
+    default_target_temperature: ${default_room_target}
+    heat_output: ch_pid_scaling_output
+    visual:
+      min_temperature: ${room_min_temp}
+      max_temperature: ${room_max_temp}
+      temperature_step:
+        target_temperature: 0.5
+        current_temperature: 0.1
+    control_parameters:
+      kp: ${pid_kp}
+      ki: ${pid_ki}
+      kd: 0
+      output_averaging_samples: 10
+    deadband_parameters:
+      threshold_high: 0.3
+      threshold_low: -0.3
+      kp_multiplier: 0
+      ki_multiplier: 0.15
+      kd_multiplier: 0
+      deadband_output_averaging_samples: 15
+    on_state:
+      - if:
+          condition:
+            - lambda: "return id(ch_climate).mode == CLIMATE_MODE_OFF;"
+          then:
+            - switch.turn_off: ch_enable
+          else:
+            - switch.turn_on: ch_enable
 
 binary_sensor:
   - platform: opentherm
@@ -253,8 +354,10 @@ binary_sensor:
     entity_category: diagnostic
 
   # Optional physical backup button — wire a momentary push-button between
-  # this pin and GND. Press to toggle central heating on/off locally,
-  # independent of WiFi/Home Assistant.
+  # this pin and GND. Press to toggle the heating climate on/off locally,
+  # independent of WiFi/Home Assistant. Toggles climate mode (not the
+  # switch directly) so it stays in sync with the PID loop's own on_state
+  # handler above.
   - platform: gpio
     id: backup_button
     name: "Backup Heat Button"
@@ -266,17 +369,51 @@ binary_sensor:
         pullup: true
       inverted: true
     on_press:
-      - switch.toggle: ch_enable
-      - logger.log: "Backup heat button pressed — toggled central heating locally"
+      - lambda: |-
+          auto call = id(ch_climate).make_call();
+          if (id(ch_climate).mode == CLIMATE_MODE_OFF) {
+            call.set_mode(CLIMATE_MODE_HEAT);
+          } else {
+            call.set_mode(CLIMATE_MODE_OFF);
+          }
+          call.perform();
+      - logger.log: "Backup heat button pressed — toggled heating climate locally"
+
+  # Optional: window/door cutoff. Uncomment and set your entity ID to force
+  # the heating climate off while open, and back to HEAT when it closes.
+  # - platform: homeassistant
+  #   id: window_open
+  #   entity_id: binary_sensor.YOUR_WINDOW_SENSOR
+  #   on_press:
+  #     - climate.control:
+  #         id: ch_climate
+  #         mode: "OFF"
+  #   on_release:
+  #     - climate.control:
+  #         id: ch_climate
+  #         mode: "HEAT"
 
 one_wire:
   - platform: gpio
     pin: ${one_wire_pin}
 
 sensor:
+  # Room temperature, imported live from your existing Home Assistant
+  # sensor — this is what ch_climate (the PID loop) targets.
+  - platform: homeassistant
+    id: room_temperature
+    entity_id: ${room_temperature_entity_id}
+
+  # Outdoor temperature, imported from Home Assistant (a weather
+  # integration entity works fine) — drives the weather-compensation
+  # ceiling in ch_pid_scaling_output above.
+  - platform: homeassistant
+    id: outdoor_temperature
+    entity_id: ${outdoor_temperature_entity_id}
+
   # External sensor on the CV return line — the ground truth for whether
-  # the boiler is actually condensing, used by the HA weather-compensation
-  # automation to clamp the flow setpoint down when the return runs hot.
+  # the boiler is actually condensing, used by ch_pid_scaling_output to
+  # clamp the flow setpoint down when the return runs hot.
   - platform: dallas_temp
     id: return_line_temperature
     name: "CV Return Line Temperature"
