@@ -1,0 +1,343 @@
+# OpenTherm Thermostat — ESPHome firmware
+#
+# Hardware: DIYLESS OpenTherm Thermostat 1
+#   https://diyless.com/product/opentherm-thermostat
+#   WeMos D1 Mini ESP32 + Master OpenTherm Shield (no onboard display/buttons)
+#
+# Boiler: Intergas 28/24 cW4 (modulating condensing combi)
+#
+# Design:
+#   This device is intentionally a "dumb but reliable" OpenTherm bridge. It
+#   exposes every boiler sensor/switch/number to Home Assistant and does NOT
+#   run its own room-temperature PID loop — there's no room sensor on this
+#   device. The CH flow setpoint (number.ch_setpoint below) is meant to be
+#   driven by outdoor-temperature weather compensation on the HA side (see
+#   home_assistant/blueprints/opentherm_weather_compensation.yaml), which is
+#   the correct control strategy for a modulating condensing boiler and the
+#   single biggest lever for gas savings: it keeps the boiler modulating at
+#   the lowest flow temperature that still heats the house, maximizing
+#   condensing efficiency, instead of cycling on/off against a room stat.
+#
+#   The external DS18B20 on the CV return line lets you (and the HA
+#   automation) verify/enforce that the boiler is actually condensing
+#   (return temp low enough), independent of whatever the boiler itself
+#   reports over OpenTherm.
+#
+#   Backup control (works without Home Assistant):
+#     1. ESPHome's built-in web_server — a local web UI on the device's IP,
+#        reachable from any browser on your LAN, to toggle heating/DHW and
+#        set temperatures even if HA is down.
+#     2. A physical push-button (optional, you wire it yourself) that
+#        toggles central heating on/off directly on the device — no WiFi,
+#        no HA, no cloud required.
+#     3. An on-device watchdog: if the Home Assistant API connection drops
+#        for longer than ha_disconnect_backup_delay, the device falls back
+#        to a safe fixed CH setpoint automatically so the house doesn't go
+#        cold while you fix HA.
+
+substitutions:
+  name: opentherm-thermostat
+  friendly_name: "OpenTherm Thermostat"
+
+  # OpenTherm master shield pins (fixed by the DIYLESS Thermostat 1 board —
+  # do not change unless you're on different hardware)
+  ot_in_pin: "21"
+  ot_out_pin: "22"
+
+  # 1-Wire bus for the external DS18B20 mounted on the CV return line.
+  # Pin 14 is DIYLESS's documented 1-Wire pin for stacking with the Master
+  # OpenTherm Shield on the WeMos D1 Mini ESP32.
+  one_wire_pin: "14"
+
+  # Optional physical backup button (you wire a momentary switch to GND).
+  # GPIO4 is free on the WeMos D1 Mini ESP32 after the shield uses 21/22/14
+  # — double check against your board's silkscreen before wiring.
+  backup_button_pin: "4"
+
+  # Central heating (CH) flow setpoint range written by Home Assistant.
+  # Kept wide so the weather-compensation automation has room to modulate
+  # low (condensing) on mild days and higher on cold days.
+  ch_min_setpoint: "20"
+  ch_max_setpoint: "80"
+  # Safe fallback CH setpoint used only by the HA-disconnect watchdog and
+  # the physical backup button — deliberately modest, not a design-day value.
+  ch_fallback_setpoint: "45"
+
+  # Domestic hot water (DHW) setpoint range/default for the cW4's instant DHW.
+  dhw_min_setpoint: "30"
+  dhw_max_setpoint: "65"
+  dhw_default_setpoint: "60"
+
+  # Return-water temperature below which the boiler is considered to be
+  # condensing (flue gas condenses, recovering extra latent heat). Intergas
+  # cW4 condenses noticeably below ~55°C return; this is a diagnostic
+  # threshold only, used for the "Condensing Mode Active" indicator.
+  condensing_threshold: "55"
+
+  # How long the Home Assistant API connection must be down before the
+  # device engages its safe fallback CH setpoint.
+  ha_disconnect_backup_delay: "15min"
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+logger:
+  level: INFO
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+  on_client_connected:
+    - script.stop: engage_backup_mode
+    - globals.set:
+        id: backup_mode_active
+        value: "false"
+    - lambda: |-
+        id(ha_connected).publish_state(true);
+        id(backup_mode_indicator).publish_state(false);
+    - logger.log: "Home Assistant reconnected"
+  on_client_disconnected:
+    - lambda: id(ha_connected).publish_state(false);
+    - logger.log:
+        level: WARN
+        format: "Home Assistant API disconnected — backup watchdog started (%s until fallback)"
+        args: ['"${ha_disconnect_backup_delay}"']
+    - script.execute: engage_backup_mode
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  ap:
+    ssid: "${friendly_name} Fallback"
+    password: !secret ap_fallback_password
+
+captive_portal:
+
+# Local backup control surface — usable from any browser on the LAN even
+# when Home Assistant is unreachable.
+web_server:
+  version: 3
+
+globals:
+  - id: backup_mode_active
+    type: bool
+    restore_value: false
+    initial_value: "false"
+
+script:
+  - id: engage_backup_mode
+    then:
+      - delay: ${ha_disconnect_backup_delay}
+      - logger.log:
+          level: WARN
+          format: "Home Assistant still disconnected — engaging safe fallback CH setpoint (${ch_fallback_setpoint}°C)"
+      - globals.set:
+          id: backup_mode_active
+          value: "true"
+      - lambda: id(backup_mode_indicator).publish_state(true);
+      - switch.turn_on: ch_enable
+      - number.set:
+          id: ch_setpoint
+          value: ${ch_fallback_setpoint}
+
+# Enable OpenTherm communication with the boiler
+# https://esphome.io/components/opentherm.html
+opentherm:
+  in_pin: ${ot_in_pin}
+  out_pin: ${ot_out_pin}
+
+switch:
+  - platform: opentherm
+    ch_enable:
+      id: ch_enable
+      name: "Central Heating"
+      restore_mode: RESTORE_DEFAULT_OFF
+    dhw_enable:
+      id: dhw_enable
+      name: "Hot Water"
+      restore_mode: RESTORE_DEFAULT_OFF
+
+number:
+  # Primary control surface for gas-saving weather compensation, driven
+  # from Home Assistant (see the weather_compensation blueprint).
+  - platform: opentherm
+    t_set:
+      id: ch_setpoint
+      name: "Heating Flow Setpoint"
+      step: 0.5
+      min_value: ${ch_min_setpoint}
+      max_value: ${ch_max_setpoint}
+      restore_value: true
+      initial_value: ${ch_fallback_setpoint}
+    t_dhw_set:
+      id: dhw_setpoint
+      name: "Hot Water Setpoint"
+      step: 1
+      min_value: ${dhw_min_setpoint}
+      max_value: ${dhw_max_setpoint}
+      restore_value: true
+      initial_value: ${dhw_default_setpoint}
+
+binary_sensor:
+  - platform: opentherm
+    ch_active:
+      id: ch_active
+      name: "Heating Active"
+    dhw_active:
+      id: dhw_active
+      name: "Hot Water Active"
+    flame_on:
+      id: flame_on
+      name: "Flame On"
+    fault_indication:
+      id: fault_indication
+      name: "Boiler Fault"
+      entity_category: diagnostic
+    diagnostic_indication:
+      id: diagnostic_indication
+      name: "Boiler Diagnostic"
+      entity_category: diagnostic
+    service_request:
+      name: "Service Required"
+      entity_category: diagnostic
+    lockout_reset:
+      name: "Lockout Reset"
+      entity_category: diagnostic
+    low_water_pressure:
+      name: "Low Water Pressure Fault"
+      entity_category: diagnostic
+    flame_fault:
+      name: "Flame Fault"
+      entity_category: diagnostic
+    air_pressure_fault:
+      name: "Air Pressure Fault"
+      entity_category: diagnostic
+    water_over_temp:
+      name: "Water Overtemperature"
+      entity_category: diagnostic
+
+  # Diagnostic indicator: is the boiler currently in its efficient
+  # condensing range, based on the external return-line sensor?
+  - platform: template
+    name: "Condensing Mode Active"
+    id: condensing_mode_active
+    entity_category: diagnostic
+    icon: mdi:leaf
+    lambda: |-
+      if (id(return_line_temperature).has_state()) {
+        return id(return_line_temperature).state < ${condensing_threshold};
+      } else {
+        return {};
+      }
+
+  # Connectivity/backup-status visibility
+  - platform: template
+    name: "Home Assistant Connected"
+    id: ha_connected
+    entity_category: diagnostic
+    device_class: connectivity
+  - platform: template
+    name: "Backup Mode Active"
+    id: backup_mode_indicator
+    entity_category: diagnostic
+
+  # Optional physical backup button — wire a momentary push-button between
+  # this pin and GND. Press to toggle central heating on/off locally,
+  # independent of WiFi/Home Assistant.
+  - platform: gpio
+    id: backup_button
+    name: "Backup Heat Button"
+    entity_category: diagnostic
+    pin:
+      number: ${backup_button_pin}
+      mode:
+        input: true
+        pullup: true
+      inverted: true
+    on_press:
+      - switch.toggle: ch_enable
+      - logger.log: "Backup heat button pressed — toggled central heating locally"
+
+one_wire:
+  - platform: gpio
+    pin: ${one_wire_pin}
+
+sensor:
+  # External sensor on the CV return line — the ground truth for whether
+  # the boiler is actually condensing, used by the HA weather-compensation
+  # automation to clamp the flow setpoint down when the return runs hot.
+  - platform: dallas_temp
+    id: return_line_temperature
+    name: "CV Return Line Temperature"
+    update_interval: 30s
+    accuracy_decimals: 2
+    filters:
+      - sliding_window_moving_average:
+          window_size: 5
+          send_every: 2
+
+  # OpenTherm sensors reported by the boiler
+  # https://esphome.io/components/opentherm.html#sensor
+  - platform: opentherm
+    t_boiler:
+      name: "Boiler Flow Temperature"
+    t_dhw:
+      name: "Hot Water Temperature"
+    t_dhw2:
+      name: "Hot Water Temperature 2"
+    t_ret:
+      name: "Return Water Temperature (Boiler Reported)"
+    rel_mod_level:
+      name: "Boiler Relative Modulation Level"
+    max_t_set:
+      name: "Max CH Setpoint"
+      entity_category: diagnostic
+    max_t_set_ub:
+      name: "Upper Bound of CH Setpoint"
+      entity_category: diagnostic
+    max_t_set_lb:
+      name: "Lower Bound of CH Setpoint"
+      entity_category: diagnostic
+    t_exhaust:
+      name: "Boiler Exhaust Temperature"
+      entity_category: diagnostic
+    ch_pressure:
+      name: "CH Water Pressure"
+      entity_category: diagnostic
+    oem_fault_code:
+      name: "OEM Fault Code"
+      entity_category: diagnostic
+    oem_diagnostic_code:
+      name: "OEM Diagnostic Code"
+      entity_category: diagnostic
+
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    entity_category: diagnostic
+    update_interval: 60s
+
+  - platform: uptime
+    name: "Uptime"
+    entity_category: diagnostic
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
+      entity_category: diagnostic
+
+button:
+  - platform: restart
+    name: "Restart"
+    entity_category: diagnostic

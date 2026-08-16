@@ -1,0 +1,66 @@
+# Example Lovelace view for the OpenTherm thermostat.
+# Replace the entity IDs with your actual device's entity IDs (they'll be
+# prefixed with the device name you set in opentherm-thermostat.yaml, e.g.
+# "opentherm_thermostat_...").
+#
+# Add as a new dashboard view, or paste the cards into an existing dashboard
+# in YAML mode.
+
+title: OpenTherm
+views:
+  - title: Heating
+    path: opentherm
+    cards:
+      - type: thermostat
+        entity: climate.opentherm_thermostat  # only if you add a climate helper; otherwise remove
+
+      - type: entities
+        title: Control
+        entities:
+          - entity: switch.opentherm_thermostat_central_heating
+          - entity: switch.opentherm_thermostat_hot_water
+          - entity: number.opentherm_thermostat_heating_flow_setpoint
+          - entity: number.opentherm_thermostat_hot_water_setpoint
+
+      - type: glance
+        title: Boiler status
+        entities:
+          - entity: binary_sensor.opentherm_thermostat_flame_on
+            name: Flame
+          - entity: binary_sensor.opentherm_thermostat_heating_active
+            name: Heating
+          - entity: binary_sensor.opentherm_thermostat_hot_water_active
+            name: Hot water
+          - entity: binary_sensor.opentherm_thermostat_condensing_mode_active
+            name: Condensing
+
+      - type: history-graph
+        title: Flow vs. return temperature
+        hours_to_show: 24
+        entities:
+          - entity: sensor.opentherm_thermostat_boiler_flow_temperature
+            name: Flow
+          - entity: sensor.opentherm_thermostat_cv_return_line_temperature
+            name: Return (external sensor)
+          - entity: sensor.opentherm_thermostat_return_water_temperature_boiler_reported
+            name: Return (boiler reported)
+
+      - type: gauge
+        entity: sensor.opentherm_thermostat_boiler_relative_modulation_level
+        name: Modulation
+        min: 0
+        max: 100
+        severity:
+          green: 0
+          yellow: 60
+          red: 90
+
+      - type: entities
+        title: Backup & diagnostics
+        show_header_toggle: false
+        entities:
+          - entity: binary_sensor.opentherm_thermostat_home_assistant_connected
+          - entity: binary_sensor.opentherm_thermostat_backup_mode_active
+          - entity: binary_sensor.opentherm_thermostat_boiler_fault
+          - entity: sensor.opentherm_thermostat_ch_water_pressure
+          - entity: sensor.opentherm_thermostat_wifi_signal
