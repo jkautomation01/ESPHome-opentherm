@@ -50,6 +50,45 @@ HA goes away, the last known readings simply go stale rather than the
 whole control loop disappearing, and the watchdog described below takes
 over if that stretches on too long.
 
+## Nest-style extras
+
+Three optional features, each behind its own switch (all default **on** —
+flip any off from Home Assistant or the local web UI to fall back to
+plain room-led + weather-compensated control):
+
+- **Room Sensor Glitch Guard** (`switch.*_room_sensor_glitch_guard`) —
+  Nest's Sunblock is specific to a temperature sensor built into a
+  sun-exposed wall display; since your room sensor is your own existing
+  HA sensor rather than anything mounted on this board, that exact
+  problem generally doesn't apply here. What this does instead: reject
+  any room-temperature update from Home Assistant that jumps faster than
+  `glitch_guard_max_rate_c_per_min` (default 1.0°C/min — real room air
+  doesn't move anywhere near that fast) and hold the last good value
+  instead. Catches a sensor glitch, a stuck HA integration, or genuinely
+  a sensor sitting in direct sun, without the PID loop overreacting to
+  it. Every downstream feature (PID, anticipatory shutoff, preheat) sees
+  the cleaned-up value. Visible via **Room Sensor Glitch Detected**.
+- **Anticipate Heating Coast** (`switch.*_anticipate_heating_coast`) —
+  Nest's True Radiant equivalent. As the room nears its target, the flow
+  setpoint eases down early (proportionally, within a "coast window") so
+  residual heat already in the radiators/floor carries the room the rest
+  of the way instead of overshooting. The size of that window is driven
+  by `anticipatory_coast_minutes` × a **learned heating rate** — the
+  device tracks how fast your room actually warms up while the boiler is
+  firing (exposed as the **Learned Heating Rate** diagnostic sensor,
+  °C/h) and uses that instead of a fixed guess. Raise
+  `anticipatory_coast_minutes` well above the 8-minute default (try
+  20–30) if you're on underfloor heating rather than radiators — floor
+  slabs coast for much longer.
+- **Preheat Schedule** (`switch.*_preheat_schedule`) — Nest's Time to
+  Temp / auto-schedule equivalent. Up to 4 time-of-day target-temperature
+  slots (`schedule_slot1_hour/minute/target` through `slot4`), started
+  early enough — again based on the learned heating rate — to hit each
+  slot's target right at its scheduled time rather than starting cold at
+  that exact minute. A manual change on the thermostat card is respected
+  until the next slot boundary, same as a normal scheduling thermostat.
+  Needs the `timezone` substitution set correctly for the schedule clock.
+
 ## Repository layout
 
 ```
@@ -84,6 +123,10 @@ if you need to change any of them.
    - `room_temperature_entity_id` / `outdoor_temperature_entity_id` — your
      existing Home Assistant sensor entity IDs (a weather integration
      entity works fine for outdoor temperature).
+   - `timezone` and the four `schedule_slotN_hour`/`_minute`/`_target`
+     substitutions — your daily routine (defaults: 06:30→20°C,
+     09:00→17°C, 17:00→20°C, 22:30→16°C). Turn off the Preheat Schedule
+     switch after flashing if you'd rather set the target manually.
    - Everything else (weather-curve points, condensing threshold, PID
      gains, setpoint ranges) has a sensible default — see "Tuning" below.
 2. `cp secrets.yaml.example secrets.yaml` and fill in your WiFi
@@ -108,15 +151,17 @@ An example dashboard view is in `home_assistant/dashboard_example.yaml`.
 
 - `climate` — **Heating**: the thermostat card (target room temperature, heat/off)
 - `switch` — Hot Water (DHW on/off; Central Heating also exists but is
-  driven automatically by the Heating climate's mode)
+  driven automatically by the Heating climate's mode), plus the three
+  feature toggles: Room Sensor Glitch Guard, Anticipate Heating Coast,
+  Preheat Schedule
 - `number` — Hot Water Setpoint (°C)
 - `sensor` — boiler flow temp, DHW temp, return temp (boiler-reported),
   **CV Return Line Temperature (your external sensor)**, modulation %,
   CH water pressure, exhaust temp, fault/diagnostic codes, WiFi signal,
-  uptime
+  uptime, **Learned Heating Rate**
 - `binary_sensor` — flame, heating/DHW active, boiler fault/diagnostic
   flags, **Condensing Mode Active**, **Home Assistant Connected**,
-  **Backup Mode Active**
+  **Backup Mode Active**, **Room Sensor Glitch Detected**
 - `button` — Restart
 
 ## Tuning
@@ -136,14 +181,16 @@ An example dashboard view is in `home_assistant/dashboard_example.yaml`.
   over the first couple of weeks, and lower `design_flow_temp` if the
   boiler condenses reliably — lower flow temps at the same comfort level
   is the actual gas saving.
-- Optional extras are pre-written but commented out in the firmware:
-  window/door cutoff (search for "window/door cutoff" in
-  `opentherm-thermostat.yaml`) needs a `binary_sensor.*` entity ID filled
-  in and uncommenting. For scheduling (night setback, away setback), the
-  `climate.opentherm_thermostat_heating` entity is a completely normal HA
-  climate entity — a couple of small `climate.set_temperature` /
-  `climate.set_hvac_mode` calls in an ordinary HA automation handle that
-  without needing anything built into the firmware.
+- A window/door cutoff is pre-written but commented out in the firmware
+  (search for "window/door cutoff" in `opentherm-thermostat.yaml`) — needs
+  a `binary_sensor.*` entity ID filled in and uncommenting.
+- The built-in Preheat Schedule covers a fixed daily routine (4 slots).
+  For one-off exceptions (an away setback while on holiday, a "party
+  night" override), `climate.opentherm_thermostat_heating` is a
+  completely normal HA climate entity — a `climate.set_temperature` /
+  `climate.set_hvac_mode` call from an ordinary HA automation works
+  alongside the schedule (it'll just get overridden again at the next
+  scheduled slot boundary, same as a manual card change).
 
 ## Backup control (no Home Assistant required)
 

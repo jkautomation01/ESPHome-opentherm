@@ -38,6 +38,20 @@
 #        PID loop and forces a safe fixed CH setpoint so the house doesn't
 #        go cold while you fix HA (the room/outdoor readings come from HA,
 #        so the control loop can't run meaningfully without it anyway).
+#
+#   Optional extras, each behind its own switch (all default on):
+#     - "Room Sensor Glitch Guard": rejects/holds implausibly fast room-
+#       temperature jumps instead of reacting to them (equivalent to Nest's
+#       Sunblock, generalized to any sensor glitch, not just direct sun).
+#     - "Anticipate Heating Coast": eases the flow setpoint down early as
+#       the room nears target, based on a learned heating rate, so
+#       residual radiator/floor heat coasts the rest of the way instead of
+#       overshooting (equivalent to Nest's True Radiant).
+#     - "Preheat Schedule": up to 4 time-of-day target-temperature slots,
+#       started early enough (based on the same learned heating rate) to
+#       hit each slot's target right on time (equivalent to Nest's Time to
+#       Temp / auto-schedule). Manual changes via the thermostat card are
+#       respected until the next scheduled slot change.
 
 substitutions:
   name: opentherm-thermostat
@@ -102,6 +116,36 @@ substitutions:
   # device stops the PID loop and engages its safe fallback CH setpoint.
   ha_disconnect_backup_delay: "15min"
 
+  # Room Sensor Glitch Guard (Sunblock equivalent): a room-temperature
+  # jump faster than this (°C per minute) is treated as implausible and
+  # held at the last good value instead of being acted on.
+  glitch_guard_max_rate_c_per_min: "1.0"
+
+  # Anticipate Heating Coast (True Radiant equivalent): how many minutes
+  # of "coast" (residual radiator/floor heat still warming the room after
+  # the flow setpoint is eased down) to plan for. Raise substantially for
+  # underfloor heating (try 20-30); lower for lightweight radiators.
+  anticipatory_coast_minutes: "8"
+
+  # Preheat Schedule (Time to Temp equivalent). Local timezone for the
+  # schedule clock, and up to 4 daily time-of-day target slots (24h
+  # hour/minute). Edit these to match your routine; a slot's target stays
+  # in effect until the next slot's (preheat-adjusted) start time.
+  timezone: "Europe/Amsterdam"
+  preheat_max_lead_minutes: "180"
+  schedule_slot1_hour: "6"
+  schedule_slot1_minute: "30"
+  schedule_slot1_target: "20"
+  schedule_slot2_hour: "9"
+  schedule_slot2_minute: "0"
+  schedule_slot2_target: "17"
+  schedule_slot3_hour: "17"
+  schedule_slot3_minute: "0"
+  schedule_slot3_target: "20"
+  schedule_slot4_hour: "22"
+  schedule_slot4_minute: "30"
+  schedule_slot4_target: "16"
+
 esphome:
   name: ${name}
   friendly_name: ${friendly_name}
@@ -156,11 +200,114 @@ captive_portal:
 web_server:
   version: 3
 
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: ${timezone}
+
 globals:
   - id: backup_mode_active
     type: bool
     restore_value: false
     initial_value: "false"
+
+  # Room Sensor Glitch Guard state
+  - id: glitch_guard_last_value
+    type: float
+    restore_value: false
+    initial_value: "NAN"
+  - id: glitch_guard_last_time
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+
+  # Learned heating rate (°C per minute while actively heating), shared by
+  # the Anticipate Heating Coast and Preheat Schedule features.
+  - id: heating_rate_prev_room_temp
+    type: float
+    restore_value: false
+    initial_value: "NAN"
+  - id: learned_heating_rate_c_per_min
+    type: float
+    restore_value: true
+    initial_value: "0.05"
+
+  # Preheat Schedule state: the effective (preheat-adjusted) start minute
+  # of the last-applied slot, so re-applying the same slot every minute
+  # doesn't fight a manual thermostat-card change mid-slot.
+  - id: preheat_last_applied_effective_start
+    type: int
+    restore_value: false
+    initial_value: "-1000000"
+
+interval:
+  - interval: 60s
+    then:
+      - lambda: |-
+          // Learn the room's heating rate while the boiler is actively
+          // calling for heat. Feeds the two features below.
+          if (id(room_temperature).has_state()) {
+            float room_temp = id(room_temperature).state;
+            if (!isnan(id(heating_rate_prev_room_temp)) && id(ch_active).state) {
+              float delta = room_temp - id(heating_rate_prev_room_temp);
+              if (delta > 0 && delta < 0.5f) {
+                id(learned_heating_rate_c_per_min) =
+                    id(learned_heating_rate_c_per_min) * 0.95f + delta * 0.05f;
+              }
+            }
+            id(heating_rate_prev_room_temp) = room_temp;
+          }
+      - lambda: |-
+          // Preheat Schedule: apply whichever of the 4 slots has the most
+          // recent preheat-adjusted start time at or before now, but only
+          // when the active slot actually changes — so a manual change on
+          // the thermostat card is respected until the next slot change.
+          if (!id(preheat_schedule_enabled).state) return;
+          if (!id(sntp_time).now().is_valid()) return;
+
+          auto now = id(sntp_time).now();
+          int now_min = now.hour * 60 + now.minute;
+          float room_temp = id(room_temperature).has_state()
+              ? id(room_temperature).state
+              : (float) ${default_room_target};
+          float rate = id(learned_heating_rate_c_per_min);
+          if (rate < 0.005f) rate = 0.005f;
+
+          struct Slot { int start_min; float target; };
+          Slot slots[4] = {
+            {${schedule_slot1_hour} * 60 + ${schedule_slot1_minute}, ${schedule_slot1_target}},
+            {${schedule_slot2_hour} * 60 + ${schedule_slot2_minute}, ${schedule_slot2_target}},
+            {${schedule_slot3_hour} * 60 + ${schedule_slot3_minute}, ${schedule_slot3_target}},
+            {${schedule_slot4_hour} * 60 + ${schedule_slot4_minute}, ${schedule_slot4_target}},
+          };
+
+          int best_effective_start = -1000000;
+          float best_target = id(ch_climate).target_temperature;
+
+          for (int i = 0; i < 4; i++) {
+            float gap = slots[i].target - room_temp;
+            float lead_min = gap > 0 ? (gap / rate) : 0;
+            if (lead_min > (float) ${preheat_max_lead_minutes}) {
+              lead_min = (float) ${preheat_max_lead_minutes};
+            }
+            int effective_start = slots[i].start_min - (int) lead_min;
+
+            for (int offset = -1440; offset <= 0; offset += 1440) {
+              int es = effective_start + offset;
+              if (es <= now_min && es > best_effective_start) {
+                best_effective_start = es;
+                best_target = slots[i].target;
+              }
+            }
+          }
+
+          if (best_effective_start != id(preheat_last_applied_effective_start)) {
+            id(preheat_last_applied_effective_start) = best_effective_start;
+            auto call = id(ch_climate).make_call();
+            call.set_target_temperature(best_target);
+            call.perform();
+            ESP_LOGI("preheat", "Schedule slot changed — target now %.1f°C", best_target);
+          }
 
 script:
   - id: engage_backup_mode
@@ -197,6 +344,27 @@ switch:
       id: dhw_enable
       name: "Hot Water"
       restore_mode: RESTORE_DEFAULT_OFF
+
+  # Optional-feature toggles — flip any of these off to fall back to
+  # plain room-led + weather-compensated control.
+  - platform: template
+    id: glitch_guard_enabled
+    name: "Room Sensor Glitch Guard"
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+  - platform: template
+    id: anticipatory_shutoff_enabled
+    name: "Anticipate Heating Coast"
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+  - platform: template
+    id: preheat_schedule_enabled
+    name: "Preheat Schedule"
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
 
 number:
   - platform: opentherm
@@ -244,6 +412,21 @@ output:
           float ceiling = floor + ratio * ((float) ${design_flow_temp} - floor);
 
           float target = floor + state * (ceiling - floor);
+
+          // Anticipate Heating Coast (True Radiant equivalent): ease off
+          // early as the room nears target, banking on residual radiator/
+          // floor heat to coast the rest of the way, based on the
+          // recently learned heating rate.
+          if (id(anticipatory_shutoff_enabled).state && id(room_temperature).has_state()) {
+            float room_temp = id(room_temperature).state;
+            float target_room = id(ch_climate).target_temperature;
+            float gap = target_room - room_temp;
+            float coast_window = id(learned_heating_rate_c_per_min) * (float) ${anticipatory_coast_minutes};
+            if (gap > 0 && coast_window > 0.01f && gap <= coast_window) {
+              float ease = gap / coast_window;
+              target = floor + (target - floor) * ease;
+            }
+          }
 
           if (id(return_line_temperature).has_state() &&
               id(return_line_temperature).state > (float) ${condensing_threshold}) {
@@ -352,6 +535,11 @@ binary_sensor:
     name: "Backup Mode Active"
     id: backup_mode_indicator
     entity_category: diagnostic
+  - platform: template
+    name: "Room Sensor Glitch Detected"
+    id: room_sensor_glitch_indicator
+    entity_category: diagnostic
+    device_class: problem
 
   # Optional physical backup button — wire a momentary push-button between
   # this pin and GND. Press to toggle the heating climate on/off locally,
@@ -399,10 +587,34 @@ one_wire:
 
 sensor:
   # Room temperature, imported live from your existing Home Assistant
-  # sensor — this is what ch_climate (the PID loop) targets.
+  # sensor — this is what ch_climate (the PID loop) targets. Passed
+  # through the Room Sensor Glitch Guard filter before anything else sees
+  # it, so every downstream feature gets the cleaned-up value.
   - platform: homeassistant
     id: room_temperature
     entity_id: ${room_temperature_entity_id}
+    filters:
+      - lambda: |-
+          if (!id(glitch_guard_enabled).state) {
+            return x;
+          }
+          if (!isnan(id(glitch_guard_last_value))) {
+            uint32_t now_ms = millis();
+            float dt_min = (now_ms - id(glitch_guard_last_time)) / 60000.0f;
+            if (dt_min > 0.01f) {
+              float rate = fabs(x - id(glitch_guard_last_value)) / dt_min;
+              if (rate > (float) ${glitch_guard_max_rate_c_per_min}) {
+                ESP_LOGW("glitch_guard", "Rejected implausible room temperature jump: %.2f -> %.2f (%.2f C/min)",
+                    id(glitch_guard_last_value), x, rate);
+                id(room_sensor_glitch_indicator).publish_state(true);
+                return id(glitch_guard_last_value);
+              }
+            }
+          }
+          id(glitch_guard_last_value) = x;
+          id(glitch_guard_last_time) = millis();
+          id(room_sensor_glitch_indicator).publish_state(false);
+          return x;
 
   # Outdoor temperature, imported from Home Assistant (a weather
   # integration entity works fine) — drives the weather-compensation
@@ -467,6 +679,16 @@ sensor:
   - platform: uptime
     name: "Uptime"
     entity_category: diagnostic
+
+  - platform: template
+    name: "Learned Heating Rate"
+    entity_category: diagnostic
+    unit_of_measurement: "°C/h"
+    accuracy_decimals: 2
+    icon: mdi:chart-line
+    update_interval: 60s
+    lambda: |-
+      return id(learned_heating_rate_c_per_min) * 60.0f;
 
 text_sensor:
   - platform: wifi_info
