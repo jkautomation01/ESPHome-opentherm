@@ -12,15 +12,15 @@ views:
     path: opentherm
     cards:
       - type: thermostat
-        entity: climate.opentherm_thermostat  # only if you add a climate helper; otherwise remove
+        entity: climate.opentherm_heating  # from home_assistant/opentherm_room_climate.yaml
 
       - type: entities
         title: Control
         entities:
-          - entity: switch.opentherm_thermostat_central_heating
           - entity: switch.opentherm_thermostat_hot_water
-          - entity: number.opentherm_thermostat_heating_flow_setpoint
           - entity: number.opentherm_thermostat_hot_water_setpoint
+          - entity: number.opentherm_thermostat_heating_flow_setpoint
+            name: Flow setpoint (auto, read-only in normal use)
 
       - type: glance
         title: Boiler status
@@ -64,3 +64,4 @@ views:
           - entity: binary_sensor.opentherm_thermostat_boiler_fault
           - entity: sensor.opentherm_thermostat_ch_water_pressure
           - entity: sensor.opentherm_thermostat_wifi_signal
+          - entity: input_number.opentherm_pi_integral

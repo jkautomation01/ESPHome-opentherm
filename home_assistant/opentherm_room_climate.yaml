@@ -1,0 +1,79 @@
+# Home Assistant "package" providing the thermostat UI for the OpenTherm
+# heating system: a normal climate card backed by the room-led control loop
+# in home_assistant/blueprints/opentherm_room_led_heating.yaml.
+#
+# Add to configuration.yaml:
+#
+#   homeassistant:
+#     packages:
+#       opentherm: !include home_assistant/opentherm_room_climate.yaml
+#
+# Or copy the three sections below (input_number, input_boolean, climate)
+# directly into your existing configuration.
+#
+# IMPORTANT: replace sensor.YOUR_ROOM_TEMPERATURE_SENSOR below with your
+# actual room temperature sensor's entity ID.
+#
+# This entity is UI/state only — it doesn't move the boiler by itself. The
+# blueprint automation reads room_target_temp/heat_mode_requested and
+# room_temp_entity, computes the flow setpoint, and writes it to the
+# ESPHome device. That split keeps "what the user asked for" (this file)
+# separate from "how we get there" (the automation).
+
+input_number:
+  opentherm_room_target_temp:
+    name: OpenTherm Room Target Temperature
+    icon: mdi:thermostat
+    min: 10
+    max: 28
+    step: 0.5
+    unit_of_measurement: "°C"
+    initial: 20
+
+  # Diagnostic/persistence helper for the control loop's integral term.
+  # Not meant to be shown on a dashboard; safe to ignore.
+  opentherm_pi_integral:
+    name: OpenTherm PI Integral (diagnostic)
+    icon: mdi:sigma
+    min: -20
+    max: 20
+    step: 0.1
+    initial: 0
+
+input_boolean:
+  opentherm_heat_mode_requested:
+    name: OpenTherm Heat Mode Requested
+    icon: mdi:radiator
+    initial: true
+
+climate:
+  - platform: template
+    name: OpenTherm Heating
+    unique_id: opentherm_heating_climate
+    current_temperature_template: "{{ states('sensor.YOUR_ROOM_TEMPERATURE_SENSOR') }}"
+    target_temperature_template: "{{ states('input_number.opentherm_room_target_temp') }}"
+    hvac_mode_template: "{{ 'heat' if is_state('input_boolean.opentherm_heat_mode_requested', 'on') else 'off' }}"
+    hvac_modes:
+      - heat
+      - "off"
+    min_temp: 10
+    max_temp: 25
+    precision: 0.5
+    temperature_unit: C
+    set_temperature:
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.opentherm_room_target_temp
+        data:
+          value: "{{ temperature }}"
+    set_hvac_mode:
+      - choose:
+          - conditions: "{{ hvac_mode == 'heat' }}"
+            sequence:
+              - service: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.opentherm_heat_mode_requested
+        default:
+          - service: input_boolean.turn_off
+            target:
+              entity_id: input_boolean.opentherm_heat_mode_requested
