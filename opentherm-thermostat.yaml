@@ -127,6 +127,25 @@ substitutions:
   # underfloor heating (try 20-30); lower for lightweight radiators.
   anticipatory_coast_minutes: "8"
 
+  # Heating-rate learning: instead of one blended number, rates are learned
+  # separately per outdoor-temperature bucket (heat loss — and so net
+  # warming rate — varies with outdoor temp) and per phase ("bulk" warm-up
+  # used by Preheat Schedule vs "creep" near-target used by Anticipate
+  # Heating Coast). Each bucket/phase keeps its last heat_rate_history_depth
+  # samples and is read back as their median, so one unusual day (a window
+  # left open, guests, a door propped) can't permanently skew the estimate.
+  # heat_rate_cells / heat_rate_array_size are derived values (2 phases x
+  # heat_rate_outdoor_buckets, and cells x heat_rate_history_depth) used to
+  # size the storage arrays below — if you change heat_rate_outdoor_buckets
+  # or heat_rate_history_depth, update these two AND the matching
+  # initial_value list on heat_rate_history/heat_rate_write_idx/
+  # heat_rate_count in the globals: section to match.
+  heat_rate_outdoor_buckets: "3"
+  heat_rate_history_depth: "6"
+  heat_rate_cells: "6"          # = 2 * heat_rate_outdoor_buckets
+  heat_rate_array_size: "36"    # = heat_rate_cells * heat_rate_history_depth
+  creep_phase_gap_threshold: "1.5"  # room-to-target gap (°C) below which a sample is "creep" rather than "bulk"
+
   # Preheat Schedule (Time to Temp equivalent). Local timezone for the
   # schedule clock, and up to 4 daily time-of-day target slots (24h
   # hour/minute). Edit these to match your routine; a slot's target stays
@@ -221,16 +240,30 @@ globals:
     restore_value: false
     initial_value: "0"
 
-  # Learned heating rate (°C per minute while actively heating), shared by
-  # the Anticipate Heating Coast and Preheat Schedule features.
+  # Heating-rate learning: previous room-temp sample (for computing each
+  # new delta), and a history of the last heat_rate_history_depth samples
+  # per (phase, outdoor bucket) cell, flattened into one array. Cell index
+  # = phase * heat_rate_outdoor_buckets + bucket, phase 0 = bulk warm-up,
+  # phase 1 = near-target creep. heat_rate_count tracks how many of each
+  # cell's slots are filled (so lookups before a cell has 6 samples don't
+  # read stale zeros); heat_rate_write_idx is each cell's next slot to
+  # overwrite (a ring buffer per cell).
   - id: heating_rate_prev_room_temp
     type: float
     restore_value: false
     initial_value: "NAN"
-  - id: learned_heating_rate_c_per_min
-    type: float
+  - id: heat_rate_history
+    type: float[${heat_rate_array_size}]
     restore_value: true
-    initial_value: "0.05"
+    initial_value: '{0.05,0.05,0.05,0.05,0.05,0.05,0.05,0.05,0.05,0.05,0.05,0.05,0.05,0.05,0.05,0.05,0.05,0.05,0.05,0.05,0.05,0.05,0.05,0.05,0.05,0.05,0.05,0.05,0.05,0.05,0.05,0.05,0.05,0.05,0.05,0.05}'
+  - id: heat_rate_write_idx
+    type: int[${heat_rate_cells}]
+    restore_value: true
+    initial_value: '{0,0,0,0,0,0}'
+  - id: heat_rate_count
+    type: int[${heat_rate_cells}]
+    restore_value: true
+    initial_value: '{0,0,0,0,0,0}'
 
   # Preheat Schedule state: the effective (preheat-adjusted) start minute
   # of the last-applied slot, so re-applying the same slot every minute
@@ -245,14 +278,35 @@ interval:
     then:
       - lambda: |-
           // Learn the room's heating rate while the boiler is actively
-          // calling for heat. Feeds the two features below.
+          // calling for heat, split by outdoor-temperature bucket and by
+          // phase (bulk warm-up vs near-target creep), into a small
+          // ring-buffer history per cell. Feeds the two features below.
           if (id(room_temperature).has_state()) {
             float room_temp = id(room_temperature).state;
             if (!isnan(id(heating_rate_prev_room_temp)) && id(ch_active).state) {
               float delta = room_temp - id(heating_rate_prev_room_temp);
               if (delta > 0 && delta < 0.5f) {
-                id(learned_heating_rate_c_per_min) =
-                    id(learned_heating_rate_c_per_min) * 0.95f + delta * 0.05f;
+                float outdoor = id(outdoor_temperature).has_state()
+                    ? id(outdoor_temperature).state
+                    : (float) ${design_outdoor_temp};
+                float bucket_width = ((float) ${heating_limit_outdoor_temp} - (float) ${design_outdoor_temp})
+                    / (float) ${heat_rate_outdoor_buckets};
+                int bucket = bucket_width > 0
+                    ? (int) ((outdoor - (float) ${design_outdoor_temp}) / bucket_width)
+                    : 0;
+                if (bucket < 0) bucket = 0;
+                if (bucket > ${heat_rate_outdoor_buckets} - 1) bucket = ${heat_rate_outdoor_buckets} - 1;
+
+                float gap = id(ch_climate).target_temperature - room_temp;
+                int phase = (gap < (float) ${creep_phase_gap_threshold}) ? 1 : 0;  // 0=bulk, 1=creep
+
+                int cell = phase * ${heat_rate_outdoor_buckets} + bucket;
+                int slot_idx = id(heat_rate_write_idx)[cell];
+                id(heat_rate_history)[cell * ${heat_rate_history_depth} + slot_idx] = delta;
+                id(heat_rate_write_idx)[cell] = (slot_idx + 1) % ${heat_rate_history_depth};
+                if (id(heat_rate_count)[cell] < ${heat_rate_history_depth}) {
+                  id(heat_rate_count)[cell] = id(heat_rate_count)[cell] + 1;
+                }
               }
             }
             id(heating_rate_prev_room_temp) = room_temp;
@@ -270,7 +324,38 @@ interval:
           float room_temp = id(room_temperature).has_state()
               ? id(room_temperature).state
               : (float) ${default_room_target};
-          float rate = id(learned_heating_rate_c_per_min);
+
+          // Bulk warm-up rate (phase 0) for the current outdoor bucket,
+          // read back as the median of its history (see the ring-buffer
+          // write logic in the previous lambda).
+          float outdoor_now = id(outdoor_temperature).has_state()
+              ? id(outdoor_temperature).state
+              : (float) ${design_outdoor_temp};
+          float hr_bucket_width = ((float) ${heating_limit_outdoor_temp} - (float) ${design_outdoor_temp})
+              / (float) ${heat_rate_outdoor_buckets};
+          int hr_bucket = hr_bucket_width > 0
+              ? (int) ((outdoor_now - (float) ${design_outdoor_temp}) / hr_bucket_width)
+              : 0;
+          if (hr_bucket < 0) hr_bucket = 0;
+          if (hr_bucket > ${heat_rate_outdoor_buckets} - 1) hr_bucket = ${heat_rate_outdoor_buckets} - 1;
+          int hr_cell = 0 * ${heat_rate_outdoor_buckets} + hr_bucket;  // phase 0 = bulk
+          int hr_n = id(heat_rate_count)[hr_cell];
+          float rate;
+          if (hr_n == 0) {
+            rate = 0.05f;
+          } else {
+            float hr_samples[${heat_rate_history_depth}];
+            for (int i = 0; i < hr_n; i++) {
+              hr_samples[i] = id(heat_rate_history)[hr_cell * ${heat_rate_history_depth} + i];
+            }
+            for (int i = 1; i < hr_n; i++) {
+              float key = hr_samples[i];
+              int j = i - 1;
+              while (j >= 0 && hr_samples[j] > key) { hr_samples[j + 1] = hr_samples[j]; j--; }
+              hr_samples[j + 1] = key;
+            }
+            rate = hr_samples[hr_n / 2];
+          }
           if (rate < 0.005f) rate = 0.005f;
 
           struct Slot { int start_min; float target; };
@@ -416,12 +501,41 @@ output:
           // Anticipate Heating Coast (True Radiant equivalent): ease off
           // early as the room nears target, banking on residual radiator/
           // floor heat to coast the rest of the way, based on the
-          // recently learned heating rate.
+          // near-target "creep" rate (phase 1) learned for the current
+          // outdoor bucket — reuses `outdoor` computed above.
           if (id(anticipatory_shutoff_enabled).state && id(room_temperature).has_state()) {
             float room_temp = id(room_temperature).state;
             float target_room = id(ch_climate).target_temperature;
             float gap = target_room - room_temp;
-            float coast_window = id(learned_heating_rate_c_per_min) * (float) ${anticipatory_coast_minutes};
+
+            float hr_bucket_width = ((float) ${heating_limit_outdoor_temp} - (float) ${design_outdoor_temp})
+                / (float) ${heat_rate_outdoor_buckets};
+            int hr_bucket = hr_bucket_width > 0
+                ? (int) ((outdoor - (float) ${design_outdoor_temp}) / hr_bucket_width)
+                : 0;
+            if (hr_bucket < 0) hr_bucket = 0;
+            if (hr_bucket > ${heat_rate_outdoor_buckets} - 1) hr_bucket = ${heat_rate_outdoor_buckets} - 1;
+            int hr_cell = 1 * ${heat_rate_outdoor_buckets} + hr_bucket;  // phase 1 = creep
+            int hr_n = id(heat_rate_count)[hr_cell];
+            float creep_rate;
+            if (hr_n == 0) {
+              creep_rate = 0.05f;
+            } else {
+              float hr_samples[${heat_rate_history_depth}];
+              for (int i = 0; i < hr_n; i++) {
+                hr_samples[i] = id(heat_rate_history)[hr_cell * ${heat_rate_history_depth} + i];
+              }
+              for (int i = 1; i < hr_n; i++) {
+                float key = hr_samples[i];
+                int j = i - 1;
+                while (j >= 0 && hr_samples[j] > key) { hr_samples[j + 1] = hr_samples[j]; j--; }
+                hr_samples[j + 1] = key;
+              }
+              creep_rate = hr_samples[hr_n / 2];
+            }
+            if (creep_rate < 0.005f) creep_rate = 0.005f;
+
+            float coast_window = creep_rate * (float) ${anticipatory_coast_minutes};
             if (gap > 0 && coast_window > 0.01f && gap <= coast_window) {
               float ease = gap / coast_window;
               target = floor + (target - floor) * ease;
@@ -680,15 +794,68 @@ sensor:
     name: "Uptime"
     entity_category: diagnostic
 
+  # The rate currently applicable for *today's* outdoor-temperature bucket
+  # (median of its history) — what Preheat Schedule (bulk) and Anticipate
+  # Heating Coast (creep) are actually using right now. Both duplicate the
+  # bucket/median lookup used in the interval: and output: lambdas above;
+  # see the comment on heat_rate_history in globals: for how it's stored.
   - platform: template
-    name: "Learned Heating Rate"
+    name: "Learned Heating Rate (Bulk)"
     entity_category: diagnostic
     unit_of_measurement: "°C/h"
     accuracy_decimals: 2
     icon: mdi:chart-line
-    update_interval: 60s
+    update_interval: 300s
     lambda: |-
-      return id(learned_heating_rate_c_per_min) * 60.0f;
+      float outdoor = id(outdoor_temperature).has_state()
+          ? id(outdoor_temperature).state
+          : (float) ${design_outdoor_temp};
+      float bw = ((float) ${heating_limit_outdoor_temp} - (float) ${design_outdoor_temp})
+          / (float) ${heat_rate_outdoor_buckets};
+      int bucket = bw > 0 ? (int) ((outdoor - (float) ${design_outdoor_temp}) / bw) : 0;
+      if (bucket < 0) bucket = 0;
+      if (bucket > ${heat_rate_outdoor_buckets} - 1) bucket = ${heat_rate_outdoor_buckets} - 1;
+      int cell = 0 * ${heat_rate_outdoor_buckets} + bucket;
+      int n = id(heat_rate_count)[cell];
+      if (n == 0) return 0.05f * 60.0f;
+      float samples[${heat_rate_history_depth}];
+      for (int i = 0; i < n; i++) samples[i] = id(heat_rate_history)[cell * ${heat_rate_history_depth} + i];
+      for (int i = 1; i < n; i++) {
+        float key = samples[i];
+        int j = i - 1;
+        while (j >= 0 && samples[j] > key) { samples[j + 1] = samples[j]; j--; }
+        samples[j + 1] = key;
+      }
+      return samples[n / 2] * 60.0f;
+
+  - platform: template
+    name: "Learned Heating Rate (Creep)"
+    entity_category: diagnostic
+    unit_of_measurement: "°C/h"
+    accuracy_decimals: 2
+    icon: mdi:chart-line
+    update_interval: 300s
+    lambda: |-
+      float outdoor = id(outdoor_temperature).has_state()
+          ? id(outdoor_temperature).state
+          : (float) ${design_outdoor_temp};
+      float bw = ((float) ${heating_limit_outdoor_temp} - (float) ${design_outdoor_temp})
+          / (float) ${heat_rate_outdoor_buckets};
+      int bucket = bw > 0 ? (int) ((outdoor - (float) ${design_outdoor_temp}) / bw) : 0;
+      if (bucket < 0) bucket = 0;
+      if (bucket > ${heat_rate_outdoor_buckets} - 1) bucket = ${heat_rate_outdoor_buckets} - 1;
+      int cell = 1 * ${heat_rate_outdoor_buckets} + bucket;
+      int n = id(heat_rate_count)[cell];
+      if (n == 0) return 0.05f * 60.0f;
+      float samples[${heat_rate_history_depth}];
+      for (int i = 0; i < n; i++) samples[i] = id(heat_rate_history)[cell * ${heat_rate_history_depth} + i];
+      for (int i = 1; i < n; i++) {
+        float key = samples[i];
+        int j = i - 1;
+        while (j >= 0 && samples[j] > key) { samples[j + 1] = samples[j]; j--; }
+        samples[j + 1] = key;
+      }
+      return samples[n / 2] * 60.0f;
 
 text_sensor:
   - platform: wifi_info

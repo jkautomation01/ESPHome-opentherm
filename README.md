@@ -73,21 +73,68 @@ plain room-led + weather-compensated control):
   setpoint eases down early (proportionally, within a "coast window") so
   residual heat already in the radiators/floor carries the room the rest
   of the way instead of overshooting. The size of that window is driven
-  by `anticipatory_coast_minutes` × a **learned heating rate** — the
-  device tracks how fast your room actually warms up while the boiler is
-  firing (exposed as the **Learned Heating Rate** diagnostic sensor,
-  °C/h) and uses that instead of a fixed guess. Raise
+  by `anticipatory_coast_minutes` × the **learned near-target ("creep")
+  rate** — see "How the heating rate is learned" below. Raise
   `anticipatory_coast_minutes` well above the 8-minute default (try
   20–30) if you're on underfloor heating rather than radiators — floor
   slabs coast for much longer.
 - **Preheat Schedule** (`switch.*_preheat_schedule`) — Nest's Time to
   Temp / auto-schedule equivalent. Up to 4 time-of-day target-temperature
   slots (`schedule_slot1_hour/minute/target` through `slot4`), started
-  early enough — again based on the learned heating rate — to hit each
+  early enough — based on the learned **bulk warm-up rate** — to hit each
   slot's target right at its scheduled time rather than starting cold at
   that exact minute. A manual change on the thermostat card is respected
   until the next slot boundary, same as a normal scheduling thermostat.
   Needs the `timezone` substitution set correctly for the schedule clock.
+
+### How the heating rate is learned
+
+Both features above depend on knowing how fast your rooms actually warm
+up. Rather than one blended number, the firmware learns rates separately
+along two axes, since a single average would misrepresent both use cases:
+
+- **Phase** — a room warms fastest right after you raise the target (flow
+  setpoint near the weather-curve ceiling) and slows as it approaches
+  target (PID error shrinking, Anticipate Heating Coast already easing
+  off). Averaging those together would make Preheat Schedule's lead-time
+  estimate too short and Anticipate Heating Coast's coast window too
+  long. So two phases are tracked separately: **bulk** warm-up (used by
+  Preheat Schedule) whenever the room-to-target gap is ≥
+  `creep_phase_gap_threshold` (default 1.5°C), and **creep** (used by
+  Anticipate Heating Coast) whenever it's below that.
+- **Outdoor-temperature bucket** — heat loss scales with the difference
+  between room and outdoor temperature, so the same flow setpoint warms a
+  room slower on a cold day than a mild one. `heat_rate_outdoor_buckets`
+  (default 3) splits the range from `design_outdoor_temp` to
+  `heating_limit_outdoor_temp` into that many buckets, each learning its
+  own rate.
+
+That's 2 phases × 3 buckets = 6 independent rates. Each one keeps a small
+ring buffer of its last `heat_rate_history_depth` samples (default 6) —
+every ~1 minute of active heating, if the room-temperature delta since
+the last sample is plausible (positive and under 0.5°C, on top of what
+the Glitch Guard already filtered), it's classified into the right
+phase/bucket cell and written into that cell's buffer, overwriting the
+oldest entry once full. When a rate is needed, it's read back as the
+**median** of that cell's buffer rather than an average, so one unusual
+sample (a door propped open mid-heat-up, a guest cracking a window)
+can't skew the estimate the way it would in a running average — it just
+gets outvoted by the more typical samples around it.
+
+Each cell starts seeded at a generic 0.05°C/min (~3°C/h) guess and is
+used as-is until real samples arrive, so the two features aren't inert
+on day one; expect the numbers to firm up over the first week or so as
+the house sees a range of outdoor conditions and warm-up situations. The
+six current rates are visible as **Learned Heating Rate (Bulk)** and
+**Learned Heating Rate (Creep)** (both °C/h, for whichever outdoor bucket
+currently applies) — watch those over the first days to sanity-check
+they're converging on plausible numbers for your house.
+
+If you change `heat_rate_outdoor_buckets` or `heat_rate_history_depth`,
+you also need to update `heat_rate_cells` / `heat_rate_array_size` and
+the matching `initial_value` list on `heat_rate_history` /
+`heat_rate_write_idx` / `heat_rate_count` in the `globals:` section —
+the comments there spell out the sizing formula.
 
 ## Repository layout
 
@@ -158,7 +205,7 @@ An example dashboard view is in `home_assistant/dashboard_example.yaml`.
 - `sensor` — boiler flow temp, DHW temp, return temp (boiler-reported),
   **CV Return Line Temperature (your external sensor)**, modulation %,
   CH water pressure, exhaust temp, fault/diagnostic codes, WiFi signal,
-  uptime, **Learned Heating Rate**
+  uptime, **Learned Heating Rate (Bulk)**, **Learned Heating Rate (Creep)**
 - `binary_sensor` — flame, heating/DHW active, boiler fault/diagnostic
   flags, **Condensing Mode Active**, **Home Assistant Connected**,
   **Backup Mode Active**, **Room Sensor Glitch Detected**
