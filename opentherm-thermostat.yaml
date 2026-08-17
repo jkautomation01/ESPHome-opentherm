@@ -857,6 +857,146 @@ sensor:
       }
       return samples[n / 2] * 60.0f;
 
+  # All 6 individual (phase, outdoor bucket) cells, for anyone who wants
+  # to watch the learning converge rather than just trust it. Hardcoded to
+  # bucket indices 0/1/2 (bucket 0 = coldest end, near design_outdoor_temp;
+  # last bucket = mildest, near heating_limit_outdoor_temp) — valid as
+  # long as heat_rate_outdoor_buckets stays at its default of 3. If you
+  # raise it, add more of these; if you lower it below 3, delete the
+  # extras. Disabled by default so they don't clutter a normal install —
+  # enable from the entity's settings in Home Assistant.
+  - platform: template
+    name: "Heating Rate — Bulk, Bucket 1 (Coldest)"
+    entity_category: diagnostic
+    disabled_by_default: true
+    unit_of_measurement: "°C/h"
+    accuracy_decimals: 2
+    icon: mdi:chart-line
+    update_interval: 300s
+    lambda: |-
+      int cell = 0 * ${heat_rate_outdoor_buckets} + 0;
+      int n = id(heat_rate_count)[cell];
+      if (n == 0) return 0.05f * 60.0f;
+      float samples[${heat_rate_history_depth}];
+      for (int i = 0; i < n; i++) samples[i] = id(heat_rate_history)[cell * ${heat_rate_history_depth} + i];
+      for (int i = 1; i < n; i++) {
+        float key = samples[i];
+        int j = i - 1;
+        while (j >= 0 && samples[j] > key) { samples[j + 1] = samples[j]; j--; }
+        samples[j + 1] = key;
+      }
+      return samples[n / 2] * 60.0f;
+
+  - platform: template
+    name: "Heating Rate — Bulk, Bucket 2"
+    entity_category: diagnostic
+    disabled_by_default: true
+    unit_of_measurement: "°C/h"
+    accuracy_decimals: 2
+    icon: mdi:chart-line
+    update_interval: 300s
+    lambda: |-
+      int cell = 0 * ${heat_rate_outdoor_buckets} + 1;
+      int n = id(heat_rate_count)[cell];
+      if (n == 0) return 0.05f * 60.0f;
+      float samples[${heat_rate_history_depth}];
+      for (int i = 0; i < n; i++) samples[i] = id(heat_rate_history)[cell * ${heat_rate_history_depth} + i];
+      for (int i = 1; i < n; i++) {
+        float key = samples[i];
+        int j = i - 1;
+        while (j >= 0 && samples[j] > key) { samples[j + 1] = samples[j]; j--; }
+        samples[j + 1] = key;
+      }
+      return samples[n / 2] * 60.0f;
+
+  - platform: template
+    name: "Heating Rate — Bulk, Bucket 3 (Mildest)"
+    entity_category: diagnostic
+    disabled_by_default: true
+    unit_of_measurement: "°C/h"
+    accuracy_decimals: 2
+    icon: mdi:chart-line
+    update_interval: 300s
+    lambda: |-
+      int cell = 0 * ${heat_rate_outdoor_buckets} + 2;
+      int n = id(heat_rate_count)[cell];
+      if (n == 0) return 0.05f * 60.0f;
+      float samples[${heat_rate_history_depth}];
+      for (int i = 0; i < n; i++) samples[i] = id(heat_rate_history)[cell * ${heat_rate_history_depth} + i];
+      for (int i = 1; i < n; i++) {
+        float key = samples[i];
+        int j = i - 1;
+        while (j >= 0 && samples[j] > key) { samples[j + 1] = samples[j]; j--; }
+        samples[j + 1] = key;
+      }
+      return samples[n / 2] * 60.0f;
+
+  - platform: template
+    name: "Heating Rate — Creep, Bucket 1 (Coldest)"
+    entity_category: diagnostic
+    disabled_by_default: true
+    unit_of_measurement: "°C/h"
+    accuracy_decimals: 2
+    icon: mdi:chart-line
+    update_interval: 300s
+    lambda: |-
+      int cell = 1 * ${heat_rate_outdoor_buckets} + 0;
+      int n = id(heat_rate_count)[cell];
+      if (n == 0) return 0.05f * 60.0f;
+      float samples[${heat_rate_history_depth}];
+      for (int i = 0; i < n; i++) samples[i] = id(heat_rate_history)[cell * ${heat_rate_history_depth} + i];
+      for (int i = 1; i < n; i++) {
+        float key = samples[i];
+        int j = i - 1;
+        while (j >= 0 && samples[j] > key) { samples[j + 1] = samples[j]; j--; }
+        samples[j + 1] = key;
+      }
+      return samples[n / 2] * 60.0f;
+
+  - platform: template
+    name: "Heating Rate — Creep, Bucket 2"
+    entity_category: diagnostic
+    disabled_by_default: true
+    unit_of_measurement: "°C/h"
+    accuracy_decimals: 2
+    icon: mdi:chart-line
+    update_interval: 300s
+    lambda: |-
+      int cell = 1 * ${heat_rate_outdoor_buckets} + 1;
+      int n = id(heat_rate_count)[cell];
+      if (n == 0) return 0.05f * 60.0f;
+      float samples[${heat_rate_history_depth}];
+      for (int i = 0; i < n; i++) samples[i] = id(heat_rate_history)[cell * ${heat_rate_history_depth} + i];
+      for (int i = 1; i < n; i++) {
+        float key = samples[i];
+        int j = i - 1;
+        while (j >= 0 && samples[j] > key) { samples[j + 1] = samples[j]; j--; }
+        samples[j + 1] = key;
+      }
+      return samples[n / 2] * 60.0f;
+
+  - platform: template
+    name: "Heating Rate — Creep, Bucket 3 (Mildest)"
+    entity_category: diagnostic
+    disabled_by_default: true
+    unit_of_measurement: "°C/h"
+    accuracy_decimals: 2
+    icon: mdi:chart-line
+    update_interval: 300s
+    lambda: |-
+      int cell = 1 * ${heat_rate_outdoor_buckets} + 2;
+      int n = id(heat_rate_count)[cell];
+      if (n == 0) return 0.05f * 60.0f;
+      float samples[${heat_rate_history_depth}];
+      for (int i = 0; i < n; i++) samples[i] = id(heat_rate_history)[cell * ${heat_rate_history_depth} + i];
+      for (int i = 1; i < n; i++) {
+        float key = samples[i];
+        int j = i - 1;
+        while (j >= 0 && samples[j] > key) { samples[j + 1] = samples[j]; j--; }
+        samples[j + 1] = key;
+      }
+      return samples[n / 2] * 60.0f;
+
 text_sensor:
   - platform: wifi_info
     ip_address:

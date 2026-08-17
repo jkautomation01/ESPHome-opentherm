@@ -124,11 +124,16 @@ gets outvoted by the more typical samples around it.
 Each cell starts seeded at a generic 0.05°C/min (~3°C/h) guess and is
 used as-is until real samples arrive, so the two features aren't inert
 on day one; expect the numbers to firm up over the first week or so as
-the house sees a range of outdoor conditions and warm-up situations. The
-six current rates are visible as **Learned Heating Rate (Bulk)** and
-**Learned Heating Rate (Creep)** (both °C/h, for whichever outdoor bucket
-currently applies) — watch those over the first days to sanity-check
-they're converging on plausible numbers for your house.
+the house sees a range of outdoor conditions and warm-up situations.
+
+**Learned Heating Rate (Bulk)** and **Learned Heating Rate (Creep)**
+(both °C/h) always show whichever outdoor bucket currently applies —
+that's the practical "is this behaving reasonably" check, enabled by
+default. For watching all 6 cells converge individually, there are also
+6 **Heating Rate — Bulk/Creep, Bucket 1/2/3** sensors (bucket 1 =
+coldest end of the range, bucket 3 = mildest) — these are disabled by
+default (enable from the entity's settings in Home Assistant) since most
+people don't need them.
 
 If you change `heat_rate_outdoor_buckets` or `heat_rate_history_depth`,
 you also need to update `heat_rate_cells` / `heat_rate_array_size` and
