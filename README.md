@@ -195,9 +195,9 @@ if you need to change any of them.
 ## Setup
 
 1. **Edit the substitutions** at the top of `opentherm-thermostat.yaml`:
-   - `room_temperature_entity_id` / `outdoor_temperature_entity_id` — your
-     existing Home Assistant sensor entity IDs (a weather integration
-     entity works fine for outdoor temperature).
+   - `room_temperature_entity_id` / `outdoor_temperature_entity_id` are
+     already set to this install's actual Home Assistant entity IDs —
+     update them here if either sensor ever changes.
    - `timezone` and the four `schedule_slotN_hour`/`_minute`/`_target`
      substitutions — your daily routine (defaults: 06:30→20°C,
      09:00→17°C, 17:00→20°C, 22:30→16°C). Turn off the Preheat Schedule

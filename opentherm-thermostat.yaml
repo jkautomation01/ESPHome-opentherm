@@ -73,9 +73,8 @@ substitutions:
   backup_button_pin: "4"
 
   # Existing Home Assistant entities the on-device control loop reads.
-  # REPLACE these with your actual entity IDs before flashing.
-  room_temperature_entity_id: "sensor.YOUR_ROOM_TEMPERATURE_SENSOR"
-  outdoor_temperature_entity_id: "sensor.YOUR_OUTDOOR_TEMPERATURE_SENSOR"
+  room_temperature_entity_id: "sensor.woonkamer_temperatuur"
+  outdoor_temperature_entity_id: "sensor.opentherm_thermostat_outside_temperature"
 
   # Central heating (CH) flow setpoint range ever sent to the boiler.
   ch_min_setpoint: "20"
