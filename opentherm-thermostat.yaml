@@ -296,6 +296,15 @@ globals:
     type: bool
     restore_value: true
     initial_value: "false"
+  # Tracks the Operation Mode select's current option ourselves, since
+  # id(operation_mode).state isn't available on the generated
+  # template-select-with-set_action class. x (the newly-selected option)
+  # inside set_action is fine to use directly; this global stands in for
+  # "what it was before" wherever that's needed.
+  - id: operation_mode_current
+    type: std::string
+    restore_value: true
+    initial_value: '"Normal"'
 
 interval:
   - interval: 60s
@@ -344,7 +353,7 @@ interval:
           // target while active, and a schedule tick shouldn't silently
           // cancel a Holiday setting.
           if (!id(preheat_schedule_enabled).state) return;
-          if (id(operation_mode).state != "Normal") return;
+          if (id(operation_mode_current) != "Normal") return;
           if (!id(sntp_time).now().is_valid()) return;
 
           auto now = id(sntp_time).now();
@@ -499,9 +508,10 @@ select:
       - "Holiday"
     set_action:
       - lambda: |-
-          std::string prev = id(operation_mode).state;
+          std::string prev = id(operation_mode_current);
           std::string next = x;
           if (prev == next) return;
+          id(operation_mode_current) = next;
 
           if (prev == "Holiday" && next != "Holiday") {
             if (id(dhw_was_on_before_holiday)) {
