@@ -5,6 +5,12 @@
 #
 # Add as a new dashboard view, or paste the cards into an existing dashboard
 # in YAML mode.
+#
+# If you ever renamed the device (changed `name:`/`friendly_name:` and
+# reflashed), don't assume every entity picked up the new prefix — Home
+# Assistant keeps an entity's original ID stable once created. Check your
+# actual entity IDs (Developer Tools → States, or the device page) rather
+# than trusting this file's naming pattern blindly.
 
 title: OpenTherm
 views:
@@ -55,9 +61,7 @@ views:
           - entity: sensor.opentherm_thermostat_boiler_flow_temperature
             name: Flow
           - entity: sensor.opentherm_thermostat_cv_return_line_temperature
-            name: Return (external sensor)
-          - entity: sensor.opentherm_thermostat_return_water_temperature_boiler_reported
-            name: Return (boiler reported)
+            name: Return (external sensor — the boiler doesn't report its own)
 
       - type: gauge
         entity: sensor.opentherm_thermostat_boiler_relative_modulation_level

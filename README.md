@@ -273,10 +273,12 @@ tied to real entity state, not decorative.
   feature toggles: Room Sensor Glitch Guard, Anticipate Heating Coast,
   Preheat Schedule
 - `number` — Hot Water Setpoint (°C)
-- `sensor` — boiler flow temp, DHW temp, return temp (boiler-reported),
-  **CV Return Line Temperature (your external sensor)**, modulation %,
-  CH water pressure, exhaust temp, fault/diagnostic codes, WiFi signal,
-  uptime, **Learned Heating Rate (Bulk)**, **Learned Heating Rate (Creep)**
+- `sensor` — boiler flow temp, DHW temp, **CV Return Line Temperature
+  (your external sensor — the boiler's own return-temp reporting isn't
+  supported on this unit)**, modulation %, CH water pressure, OEM fault
+  code, burner starts/operation hours, DHW burner operation hours, WiFi
+  signal, uptime, **Learned Heating Rate (Bulk)**, **Learned Heating Rate
+  (Creep)**
 - `binary_sensor` — flame, heating/DHW active, boiler fault/diagnostic
   flags, **Condensing Mode Active**, **Home Assistant Connected**,
   **Backup Mode Active**, **Room Sensor Glitch Detected**
@@ -343,27 +345,35 @@ operation.
 
 OpenTherm has no "list your capabilities" command — a master can only find
 out whether the boiler supports a given Data-ID by asking for it and
-seeing whether it comes back with real data or gets NACKed. The one
-partial exception is Data-ID 3 ("Slave Configuration"), a handful of
-genuine capability flags (`binary_sensor.*_hot_water_present_capability_`,
-`*_cooling_supported_capability_`, `*_heating_circuit_2_present_capability_`,
-etc.) — everything else has to be probed empirically.
+seeing what comes back. The ESPHome `opentherm` component was briefly
+configured with every sensor/binary_sensor Data-ID it knows how to
+request (38 sensor keys, 26 binary_sensor keys) to find out empirically
+what this specific Intergas cW4 actually implements.
 
-The firmware now requests every sensor and binary_sensor Data-ID the
-ESPHome `opentherm` component knows how to ask for — all 38 sensor keys
-and all 26 binary_sensor keys, not just the ones a typical CH+DHW combi
-needs. Anything your specific boiler doesn't implement (like
-`t_exhaust`/exhaust temperature, which many residential combis — Intergas
-included — simply don't report) will just show as unavailable rather than
-a wrong value; that unavailable state *is* the answer to "does it support
-this." A few (the CH2/solar keys: `t_flow_ch2`, `t_storage`,
-`t_collector`) are almost certainly inapplicable to a cW4 with no second
-heating circuit or solar integration, but cost nothing to leave in and
-confirm.
+**Important finding from doing this**: unsupported Data-IDs do *not*
+reliably show up as "unavailable." The component dispatches a response to
+a sensor purely by matching the Data-ID field, without checking whether
+the boiler's reply was an ACK (real data) or a NACK (unsupported) — so a
+NACK that echoes the ID back with zeroed or garbage value bytes gets
+published as if it were real. `t_outside` (boiler-reported) came back as
+`-31°C` in August; several genuinely core-sounding keys — including
+`t_ret` (return temp) and `t_exhaust`, both from the *original* sensor
+list, not just the discovery pass — sat at exactly `0.0` while the boiler
+was actively firing with a real flow temperature. Data-ID 3 ("Slave
+Configuration"), the one message that's supposed to be a genuine
+capability report, came back claiming this boiler has no DHW — which is
+simply false. So "0.0" or "off" isn't proof of anything on its own;
+each candidate had to be checked for physical plausibility against what
+the boiler was actually doing at the time.
 
-Once you've flashed this and seen which of the new diagnostic entities
-actually populate, it's reasonable to prune the ones that stay
-unavailable back out of the firmware — they're harmless left in (a NACKed
-request is normal OpenTherm traffic, not an error condition), but there's
-no reason to keep asking for data a boiler has already told you it
-doesn't have.
+What survived that check and is in the firmware now: `t_boiler` (flow),
+`t_dhw`, `rel_mod_level`, `ch_pressure`, `oem_fault_code`, plus three
+newly-confirmed counters — `burner_starts`, `burner_operation_hours`,
+`dhw_burner_operation_hours` — which read plausible nonzero values (1692
+starts, 258 hours, 93 hours) and are genuinely useful for spotting
+short-cycling or tracking wear. `t_dhw` currently reads 0 too, but that's
+kept rather than pruned — DHW_TEMP is a near-universal Data-ID and the
+sensor is likely just idle (no tap open since the last reflash) rather
+than unsupported; worth re-checking while hot water is actually running.
+Everything else — including the entire "Slave Configuration" capability
+block, once its `dhw_present` flag turned out to be wrong — was removed.

@@ -733,61 +733,6 @@ binary_sensor:
       name: "Water Overtemperature"
       entity_category: diagnostic
 
-    # Slave Configuration (OpenTherm ID 3) — the boiler's own capability
-    # flags. This is the one place OpenTherm genuinely self-reports what
-    # it supports, rather than needing to be probed. Everything below
-    # this point is a discovery pass: every other binary_sensor/sensor key
-    # the ESPHome opentherm component knows about, added so unsupported
-    # ones surface as "unavailable" rather than being invisible.
-    dhw_present:
-      name: "Hot Water Present (Capability)"
-      entity_category: diagnostic
-    control_type_on_off:
-      name: "Control Type On/Off (Capability)"
-      entity_category: diagnostic
-    cooling_supported:
-      name: "Cooling Supported (Capability)"
-      entity_category: diagnostic
-    dhw_storage_tank:
-      name: "Hot Water Storage Tank (Capability)"
-      entity_category: diagnostic
-    controller_pump_control_allowed:
-      name: "Controller Pump Control Allowed (Capability)"
-      entity_category: diagnostic
-    ch2_present:
-      name: "Heating Circuit 2 Present (Capability)"
-      entity_category: diagnostic
-    dhw_setpoint_rw:
-      name: "Hot Water Setpoint Read/Write (Capability)"
-      entity_category: diagnostic
-    max_ch_setpoint_rw:
-      name: "Max CH Setpoint Read/Write (Capability)"
-      entity_category: diagnostic
-
-    # Everything else the component supports — status flags that may or
-    # may not apply to this boiler.
-    cooling_active:
-      name: "Cooling Active"
-      entity_category: diagnostic
-    ch2_active:
-      name: "Heating Circuit 2 Active"
-      entity_category: diagnostic
-    electricity_production:
-      name: "Electricity Production"
-      entity_category: diagnostic
-    water_filling:
-      name: "Water Filling"
-      entity_category: diagnostic
-    heat_mode:
-      name: "Heat Mode (vs Cooling)"
-      entity_category: diagnostic
-    dhw_setpoint_transfer_enabled:
-      name: "Hot Water Setpoint Transfer Enabled"
-      entity_category: diagnostic
-    max_ch_setpoint_transfer_enabled:
-      name: "Max CH Setpoint Transfer Enabled"
-      entity_category: diagnostic
-
   # Diagnostic indicator: is the boiler currently in its efficient
   # condensing range, based on the external return-line sensor?
   - platform: template
@@ -915,124 +860,59 @@ sensor:
 
   # OpenTherm sensors reported by the boiler
   # https://esphome.io/components/opentherm.html#sensor
+  #
+  # Trimmed after a capability-discovery pass (flashed with every sensor
+  # key the ESPHome opentherm component supports, then checked against
+  # live values): this component publishes whatever bytes come back
+  # regardless of ACK vs NACK, so "0.0" alone isn't proof of anything —
+  # each of these was checked for plausibility. Genuinely dead ones
+  # removed: t_ret and t_exhaust (both 0.0 while the boiler was actively
+  # firing with a real flow temp — a working sensor wouldn't read zero
+  # mid-cycle), t_dhw2/t_flow_ch2/t_storage/t_collector (no second DHW
+  # sensor, no CH2, no solar on this system), t_outside (-31°C in August —
+  # garbage), max_t_set/_ub/_lb, t_dhw_set_ub/_lb, otc_hc_ratio_ub/_lb
+  # (all setpoint-bound queries, all exactly 0), device_type/_id/_version/
+  # opentherm_version_device (identification block, all 0), max_capacity/
+  # min_mod_level/fan_speed/fan_speed_setpoint/flame_current (all 0),
+  # oem_diagnostic_code (0, unlike oem_fault_code's plausible 255 "no
+  # fault" sentinel), dhw_flow_rate/ch_pump_starts/ch_pump_operation_hours/
+  # dhw_pump_valve_starts/_hours/dhw_burner_starts (all 0, despite sibling
+  # counters below proving the boiler does support *some* counters — these
+  # specific ones just aren't among them). Every binary_sensor capability/
+  # status flag the discovery pass added was removed too: the "Slave
+  # Configuration" (ID 3) flags came back reading "Hot Water Present: off"
+  # — objectively wrong for a working combi — so nothing on that message
+  # or the related "Remote" message can be trusted, and the few flags that
+  # *were* reliably read (cooling/CH2/electricity production, all
+  # correctly "off") describe capabilities this system doesn't have anyway.
+  #
+  # Kept: t_dhw currently reads 0 too, but DHW_TEMP is a core, near-
+  # universal Data-ID and the cW4's sensor is likely just idle (no tap
+  # open since the reflash) rather than unsupported — worth re-checking
+  # while hot water is actually running before writing it off.
   - platform: opentherm
     t_boiler:
       name: "Boiler Flow Temperature"
     t_dhw:
       name: "Hot Water Temperature"
-    t_dhw2:
-      name: "Hot Water Temperature 2"
-    t_ret:
-      name: "Return Water Temperature (Boiler Reported)"
     rel_mod_level:
       name: "Boiler Relative Modulation Level"
-    max_t_set:
-      name: "Max CH Setpoint"
-      entity_category: diagnostic
-    max_t_set_ub:
-      name: "Upper Bound of CH Setpoint"
-      entity_category: diagnostic
-    max_t_set_lb:
-      name: "Lower Bound of CH Setpoint"
-      entity_category: diagnostic
-    t_exhaust:
-      name: "Boiler Exhaust Temperature"
-      entity_category: diagnostic
     ch_pressure:
       name: "CH Water Pressure"
-      entity_category: diagnostic
     oem_fault_code:
       name: "OEM Fault Code"
       entity_category: diagnostic
-    oem_diagnostic_code:
-      name: "OEM Diagnostic Code"
-      entity_category: diagnostic
 
-    # Discovery pass: every other sensor key the ESPHome opentherm
-    # component supports (device_type/device_id/counters/bounds/etc.),
-    # added to find out what this specific boiler actually reports.
-    # Anything the boiler doesn't support stays unavailable rather than
-    # showing a wrong or made-up value — that's the answer, not a bug.
-    device_type:
-      name: "Boiler Device Type"
-      entity_category: diagnostic
-    device_id:
-      name: "Boiler Device ID"
-      entity_category: diagnostic
-    device_version:
-      name: "Boiler Device Version"
-      entity_category: diagnostic
-    opentherm_version_device:
-      name: "OpenTherm Version (Boiler)"
-      entity_category: diagnostic
-    max_capacity:
-      name: "Max Boiler Capacity"
-      entity_category: diagnostic
-    min_mod_level:
-      name: "Min Modulation Level"
-      entity_category: diagnostic
-    dhw_flow_rate:
-      name: "Hot Water Flow Rate"
-      entity_category: diagnostic
-    t_outside:
-      name: "Outside Temperature (Boiler Reported)"
-      entity_category: diagnostic
-    t_dhw_set_ub:
-      name: "Upper Bound of Hot Water Setpoint"
-      entity_category: diagnostic
-    t_dhw_set_lb:
-      name: "Lower Bound of Hot Water Setpoint"
-      entity_category: diagnostic
-    otc_hc_ratio_ub:
-      name: "Upper Bound of OTC Heat Curve Ratio"
-      entity_category: diagnostic
-    otc_hc_ratio_lb:
-      name: "Lower Bound of OTC Heat Curve Ratio"
-      entity_category: diagnostic
-    fan_speed:
-      name: "Boiler Fan Speed"
-      entity_category: diagnostic
-    fan_speed_setpoint:
-      name: "Boiler Fan Speed Setpoint"
-      entity_category: diagnostic
-    flame_current:
-      name: "Flame Current"
-      entity_category: diagnostic
+    # Confirmed genuinely supported by this boiler — real, plausible
+    # counters, not NACK artifacts.
     burner_starts:
       name: "Burner Starts"
       entity_category: diagnostic
     burner_operation_hours:
       name: "Burner Operation Hours"
       entity_category: diagnostic
-    ch_pump_starts:
-      name: "CH Pump Starts"
-      entity_category: diagnostic
-    ch_pump_operation_hours:
-      name: "CH Pump Operation Hours"
-      entity_category: diagnostic
-    dhw_pump_valve_starts:
-      name: "Hot Water Pump/Valve Starts"
-      entity_category: diagnostic
-    dhw_pump_valve_operation_hours:
-      name: "Hot Water Pump/Valve Operation Hours"
-      entity_category: diagnostic
-    dhw_burner_starts:
-      name: "Hot Water Burner Starts"
-      entity_category: diagnostic
     dhw_burner_operation_hours:
       name: "Hot Water Burner Operation Hours"
-      entity_category: diagnostic
-    # CH2/solar keys — almost certainly not applicable to a cW4 (no second
-    # heating circuit, no solar integration), included anyway since they
-    # cost nothing to try and confirm that assumption either way.
-    t_flow_ch2:
-      name: "Flow Temperature (CH2)"
-      entity_category: diagnostic
-    t_storage:
-      name: "Solar Storage Temperature"
-      entity_category: diagnostic
-    t_collector:
-      name: "Solar Collector Temperature"
       entity_category: diagnostic
 
   - platform: wifi_signal
