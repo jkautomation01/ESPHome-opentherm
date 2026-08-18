@@ -733,6 +733,61 @@ binary_sensor:
       name: "Water Overtemperature"
       entity_category: diagnostic
 
+    # Slave Configuration (OpenTherm ID 3) — the boiler's own capability
+    # flags. This is the one place OpenTherm genuinely self-reports what
+    # it supports, rather than needing to be probed. Everything below
+    # this point is a discovery pass: every other binary_sensor/sensor key
+    # the ESPHome opentherm component knows about, added so unsupported
+    # ones surface as "unavailable" rather than being invisible.
+    dhw_present:
+      name: "Hot Water Present (Capability)"
+      entity_category: diagnostic
+    control_type_on_off:
+      name: "Control Type On/Off (Capability)"
+      entity_category: diagnostic
+    cooling_supported:
+      name: "Cooling Supported (Capability)"
+      entity_category: diagnostic
+    dhw_storage_tank:
+      name: "Hot Water Storage Tank (Capability)"
+      entity_category: diagnostic
+    controller_pump_control_allowed:
+      name: "Controller Pump Control Allowed (Capability)"
+      entity_category: diagnostic
+    ch2_present:
+      name: "Heating Circuit 2 Present (Capability)"
+      entity_category: diagnostic
+    dhw_setpoint_rw:
+      name: "Hot Water Setpoint Read/Write (Capability)"
+      entity_category: diagnostic
+    max_ch_setpoint_rw:
+      name: "Max CH Setpoint Read/Write (Capability)"
+      entity_category: diagnostic
+
+    # Everything else the component supports — status flags that may or
+    # may not apply to this boiler.
+    cooling_active:
+      name: "Cooling Active"
+      entity_category: diagnostic
+    ch2_active:
+      name: "Heating Circuit 2 Active"
+      entity_category: diagnostic
+    electricity_production:
+      name: "Electricity Production"
+      entity_category: diagnostic
+    water_filling:
+      name: "Water Filling"
+      entity_category: diagnostic
+    heat_mode:
+      name: "Heat Mode (vs Cooling)"
+      entity_category: diagnostic
+    dhw_setpoint_transfer_enabled:
+      name: "Hot Water Setpoint Transfer Enabled"
+      entity_category: diagnostic
+    max_ch_setpoint_transfer_enabled:
+      name: "Max CH Setpoint Transfer Enabled"
+      entity_category: diagnostic
+
   # Diagnostic indicator: is the boiler currently in its efficient
   # condensing range, based on the external return-line sensor?
   - platform: template
@@ -891,6 +946,93 @@ sensor:
       entity_category: diagnostic
     oem_diagnostic_code:
       name: "OEM Diagnostic Code"
+      entity_category: diagnostic
+
+    # Discovery pass: every other sensor key the ESPHome opentherm
+    # component supports (device_type/device_id/counters/bounds/etc.),
+    # added to find out what this specific boiler actually reports.
+    # Anything the boiler doesn't support stays unavailable rather than
+    # showing a wrong or made-up value — that's the answer, not a bug.
+    device_type:
+      name: "Boiler Device Type"
+      entity_category: diagnostic
+    device_id:
+      name: "Boiler Device ID"
+      entity_category: diagnostic
+    device_version:
+      name: "Boiler Device Version"
+      entity_category: diagnostic
+    opentherm_version_device:
+      name: "OpenTherm Version (Boiler)"
+      entity_category: diagnostic
+    max_capacity:
+      name: "Max Boiler Capacity"
+      entity_category: diagnostic
+    min_mod_level:
+      name: "Min Modulation Level"
+      entity_category: diagnostic
+    dhw_flow_rate:
+      name: "Hot Water Flow Rate"
+      entity_category: diagnostic
+    t_outside:
+      name: "Outside Temperature (Boiler Reported)"
+      entity_category: diagnostic
+    t_dhw_set_ub:
+      name: "Upper Bound of Hot Water Setpoint"
+      entity_category: diagnostic
+    t_dhw_set_lb:
+      name: "Lower Bound of Hot Water Setpoint"
+      entity_category: diagnostic
+    otc_hc_ratio_ub:
+      name: "Upper Bound of OTC Heat Curve Ratio"
+      entity_category: diagnostic
+    otc_hc_ratio_lb:
+      name: "Lower Bound of OTC Heat Curve Ratio"
+      entity_category: diagnostic
+    fan_speed:
+      name: "Boiler Fan Speed"
+      entity_category: diagnostic
+    fan_speed_setpoint:
+      name: "Boiler Fan Speed Setpoint"
+      entity_category: diagnostic
+    flame_current:
+      name: "Flame Current"
+      entity_category: diagnostic
+    burner_starts:
+      name: "Burner Starts"
+      entity_category: diagnostic
+    burner_operation_hours:
+      name: "Burner Operation Hours"
+      entity_category: diagnostic
+    ch_pump_starts:
+      name: "CH Pump Starts"
+      entity_category: diagnostic
+    ch_pump_operation_hours:
+      name: "CH Pump Operation Hours"
+      entity_category: diagnostic
+    dhw_pump_valve_starts:
+      name: "Hot Water Pump/Valve Starts"
+      entity_category: diagnostic
+    dhw_pump_valve_operation_hours:
+      name: "Hot Water Pump/Valve Operation Hours"
+      entity_category: diagnostic
+    dhw_burner_starts:
+      name: "Hot Water Burner Starts"
+      entity_category: diagnostic
+    dhw_burner_operation_hours:
+      name: "Hot Water Burner Operation Hours"
+      entity_category: diagnostic
+    # CH2/solar keys — almost certainly not applicable to a cW4 (no second
+    # heating circuit, no solar integration), included anyway since they
+    # cost nothing to try and confirm that assumption either way.
+    t_flow_ch2:
+      name: "Flow Temperature (CH2)"
+      entity_category: diagnostic
+    t_storage:
+      name: "Solar Storage Temperature"
+      entity_category: diagnostic
+    t_collector:
+      name: "Solar Collector Temperature"
       entity_category: diagnostic
 
   - platform: wifi_signal

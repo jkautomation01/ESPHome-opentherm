@@ -338,3 +338,32 @@ operation.
 - Return-line condensing threshold of 55°C in the config is a reasonable
   default for Intergas units; adjust `condensing_threshold` /
   `condensing_trim_step` if you find your unit's condensing point differs.
+
+## Finding out what your boiler actually supports
+
+OpenTherm has no "list your capabilities" command — a master can only find
+out whether the boiler supports a given Data-ID by asking for it and
+seeing whether it comes back with real data or gets NACKed. The one
+partial exception is Data-ID 3 ("Slave Configuration"), a handful of
+genuine capability flags (`binary_sensor.*_hot_water_present_capability_`,
+`*_cooling_supported_capability_`, `*_heating_circuit_2_present_capability_`,
+etc.) — everything else has to be probed empirically.
+
+The firmware now requests every sensor and binary_sensor Data-ID the
+ESPHome `opentherm` component knows how to ask for — all 38 sensor keys
+and all 26 binary_sensor keys, not just the ones a typical CH+DHW combi
+needs. Anything your specific boiler doesn't implement (like
+`t_exhaust`/exhaust temperature, which many residential combis — Intergas
+included — simply don't report) will just show as unavailable rather than
+a wrong value; that unavailable state *is* the answer to "does it support
+this." A few (the CH2/solar keys: `t_flow_ch2`, `t_storage`,
+`t_collector`) are almost certainly inapplicable to a cW4 with no second
+heating circuit or solar integration, but cost nothing to leave in and
+confirm.
+
+Once you've flashed this and seen which of the new diagnostic entities
+actually populate, it's reasonable to prune the ones that stay
+unavailable back out of the firmware — they're harmless left in (a NACKed
+request is normal OpenTherm traffic, not an error condition), but there's
+no reason to keep asking for data a boiler has already told you it
+doesn't have.
