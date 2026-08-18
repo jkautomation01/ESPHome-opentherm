@@ -65,7 +65,7 @@ substitutions:
   # 1-Wire bus for the external DS18B20 mounted on the CV return line.
   # Pin 14 is DIYLESS's documented 1-Wire pin for stacking with the Master
   # OpenTherm Shield on the WeMos D1 Mini ESP32.
-  one_wire_pin: "14"
+  one_wire_pin: "D5"
 
   # Optional physical backup button (you wire a momentary switch to GND).
   # GPIO4 is free on the WeMos D1 Mini ESP32 after the shield uses 21/22/14
