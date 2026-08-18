@@ -11,8 +11,24 @@ views:
   - title: Heating
     path: opentherm
     cards:
-      - type: thermostat
-        entity: climate.opentherm_thermostat_heating  # native climate entity from the device itself
+      # Custom card — see home_assistant/README.md "Custom Lovelace Card"
+      # for install steps (copy the .js into www/, add it as a resource).
+      # Falls back to the built-in `thermostat` card, commented below, if
+      # you'd rather not install a custom resource.
+      - type: custom:opentherm-thermostat-card
+        climate_entity: climate.opentherm_thermostat_heating
+        mode_select_entity: select.opentherm_thermostat_operation_mode
+        dhw_switch_entity: switch.opentherm_thermostat_hot_water
+        dhw_setpoint_entity: number.opentherm_thermostat_hot_water_setpoint
+        dhw_active_entity: binary_sensor.opentherm_thermostat_hot_water_active
+        flame_entity: binary_sensor.opentherm_thermostat_flame_on
+        condensing_entity: binary_sensor.opentherm_thermostat_condensing_mode_active
+        modulation_entity: sensor.opentherm_thermostat_boiler_relative_modulation_level
+        connected_entity: binary_sensor.opentherm_thermostat_home_assistant_connected
+        backup_mode_entity: binary_sensor.opentherm_thermostat_backup_mode_active
+
+      # - type: thermostat
+      #   entity: climate.opentherm_thermostat_heating
 
       - type: entities
         title: Hot water

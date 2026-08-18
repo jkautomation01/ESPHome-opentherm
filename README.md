@@ -222,6 +222,48 @@ if you need to change any of them.
 
 An example dashboard view is in `home_assistant/dashboard_example.yaml`.
 
+## Custom Lovelace Card
+
+`home_assistant/www/opentherm-thermostat-card.js` is a custom card purpose-built
+for this device: a circular dial you can drag (or nudge with ±) to set the
+target temperature, the four Operation Mode chips, and animated tiles for
+flame, hot water, and condensing status. It's a plain Web Component — no
+build step, no npm, no external dependencies — so installing it is just
+copying one file:
+
+1. Copy `home_assistant/www/opentherm-thermostat-card.js` into your Home
+   Assistant `config/www/` folder (create it if it doesn't exist).
+2. **Settings → Dashboards → ⋮ → Resources → Add Resource**:
+   - URL: `/local/opentherm-thermostat-card.js`
+   - Resource type: **JavaScript Module**
+3. Add the card to a dashboard (YAML mode) — an example is already wired
+   into `home_assistant/dashboard_example.yaml`:
+   ```yaml
+   - type: custom:opentherm-thermostat-card
+     climate_entity: climate.opentherm_thermostat_heating
+     mode_select_entity: select.opentherm_thermostat_operation_mode
+     dhw_switch_entity: switch.opentherm_thermostat_hot_water
+     dhw_setpoint_entity: number.opentherm_thermostat_hot_water_setpoint
+     dhw_active_entity: binary_sensor.opentherm_thermostat_hot_water_active
+     flame_entity: binary_sensor.opentherm_thermostat_flame_on
+     condensing_entity: binary_sensor.opentherm_thermostat_condensing_mode_active
+     modulation_entity: sensor.opentherm_thermostat_boiler_relative_modulation_level
+     connected_entity: binary_sensor.opentherm_thermostat_home_assistant_connected
+     backup_mode_entity: binary_sensor.opentherm_thermostat_backup_mode_active
+   ```
+   Only `climate_entity` is required — omit any of the others and that
+   part of the card (a tile, the mode row, the connection dot) just
+   doesn't render, rather than erroring.
+
+Interactions: drag anywhere on the ring to set the target (release to
+apply), tap the ± buttons for a quick 0.5° nudge, tap the center to toggle
+heat on/off, tap a mode chip to switch Operation Mode, tap the Hot Water
+tile to toggle DHW. The flame flickers while the boiler is actually
+firing, the hot-water tile ripples while a tap is actually open (not just
+whenever DHW is enabled), and the condensing leaf glows green when the
+return-line sensor confirms the boiler's in its efficient range — all
+tied to real entity state, not decorative.
+
 ## What you get in Home Assistant
 
 - `climate` — **Heating**: the thermostat card (target room temperature, heat/off)
