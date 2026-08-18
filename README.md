@@ -141,6 +141,29 @@ the matching `initial_value` list on `heat_rate_history` /
 `heat_rate_write_idx` / `heat_rate_count` in the `globals:` section —
 the comments there spell out the sizing formula.
 
+## Operation modes
+
+A **select** entity, `select.*_operation_mode`, switches between four
+modes:
+
+- **Normal** — unchanged day-to-day behavior: Preheat Schedule (if on) or
+  whatever you last set on the thermostat card.
+- **Eco** — `eco_setback` (default 2°C) below your Normal target. A quick
+  "turn it down a bit right now" toggle.
+- **Away** — `away_setback` (default 4°C) below your Normal target, for a
+  day out.
+- **Holiday** — a fixed frost-protection target (`holiday_target`,
+  default 12°C), independent of season or schedule, and turns **Hot
+  Water** off for the duration (worth it for a multi-day absence, unlike
+  Eco/Away where DHW is on-demand and costs nothing left enabled) —
+  restored to whatever it was before Holiday when you leave.
+
+Eco/Away/Holiday all compute their target from whatever was last in
+effect under Normal, not from each other — switching Eco → Away doesn't
+stack a second setback on top of the first. Preheat Schedule only runs
+while mode is Normal, so a schedule slot boundary can't silently cancel
+a Holiday setting while you're away.
+
 ## Repository layout
 
 ```
@@ -202,6 +225,7 @@ An example dashboard view is in `home_assistant/dashboard_example.yaml`.
 ## What you get in Home Assistant
 
 - `climate` — **Heating**: the thermostat card (target room temperature, heat/off)
+- `select` — **Operation Mode**: Normal / Eco / Away / Holiday
 - `switch` — Hot Water (DHW on/off; Central Heating also exists but is
   driven automatically by the Heating climate's mode), plus the three
   feature toggles: Room Sensor Glitch Guard, Anticipate Heating Coast,

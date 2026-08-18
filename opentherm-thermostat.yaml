@@ -165,6 +165,16 @@ substitutions:
   schedule_slot4_minute: "30"
   schedule_slot4_target: "16"
 
+  # Operation Mode (select entity: Normal/Eco/Away/Holiday). Eco/Away are
+  # setbacks relative to whatever the target was in Normal mode; Holiday
+  # is an absolute frost-protection-level target, independent of season,
+  # and also turns Hot Water off (worth it for a multi-day absence, unlike
+  # Eco/Away where DHW is on-demand and costs nothing left enabled).
+  # Preheat Schedule only runs while Operation Mode is Normal.
+  eco_setback: "2"
+  away_setback: "4"
+  holiday_target: "12"
+
 esphome:
   name: ${name}
   friendly_name: ${friendly_name}
@@ -274,6 +284,20 @@ globals:
     restore_value: false
     initial_value: "-1000000"
 
+  # Operation Mode state: the target_temperature that was in effect the
+  # last time mode was Normal (so Eco/Away/Holiday compute their setback
+  # from that, and Normal can restore it), and whether DHW was on right
+  # before entering Holiday (so leaving Holiday restores it correctly
+  # instead of always forcing it back on).
+  - id: mode_saved_target
+    type: float
+    restore_value: true
+    initial_value: ${default_room_target}
+  - id: dhw_was_on_before_holiday
+    type: bool
+    restore_value: true
+    initial_value: "false"
+
 interval:
   - interval: 60s
     then:
@@ -317,7 +341,11 @@ interval:
           // recent preheat-adjusted start time at or before now, but only
           // when the active slot actually changes — so a manual change on
           // the thermostat card is respected until the next slot change.
+          // Only runs in Normal Operation Mode — Eco/Away/Holiday own the
+          // target while active, and a schedule tick shouldn't silently
+          // cancel a Holiday setting.
           if (!id(preheat_schedule_enabled).state) return;
+          if (id(operation_mode).state != "Normal") return;
           if (!id(sntp_time).now().is_valid()) return;
 
           auto now = id(sntp_time).now();
@@ -451,6 +479,76 @@ switch:
     entity_category: config
     optimistic: true
     restore_mode: RESTORE_DEFAULT_ON
+
+# Operation Mode: Normal / Eco / Away / Holiday. Eco and Away are setbacks
+# relative to whatever target_temperature was last in effect under Normal
+# (captured into mode_saved_target so switching between special modes
+# doesn't compound them); Holiday is a fixed frost-protection target and
+# also parks Hot Water off for the duration. Preheat Schedule only runs
+# while this is Normal — see the guard added to its lambda above.
+select:
+  - platform: template
+    id: operation_mode
+    name: "Operation Mode"
+    optimistic: true
+    restore_value: true
+    initial_option: "Normal"
+    options:
+      - "Normal"
+      - "Eco"
+      - "Away"
+      - "Holiday"
+    set_action:
+      - lambda: |-
+          std::string prev = id(operation_mode).state;
+          std::string next = x;
+          if (prev == next) return;
+
+          if (prev == "Holiday" && next != "Holiday") {
+            if (id(dhw_was_on_before_holiday)) {
+              id(dhw_enable).turn_on();
+            }
+          }
+          if (next == "Holiday" && prev != "Holiday") {
+            id(dhw_was_on_before_holiday) = id(dhw_enable).state;
+            id(dhw_enable).turn_off();
+          }
+
+          if (prev == "Normal" && next != "Normal") {
+            id(mode_saved_target) = id(ch_climate).target_temperature;
+          }
+
+          float min_t = (float) ${room_min_temp};
+          float max_t = (float) ${room_max_temp};
+
+          if (next == "Normal") {
+            if (id(preheat_schedule_enabled).state) {
+              // Let the next 60s tick immediately reapply the currently
+              // active schedule slot, rather than restoring a possibly
+              // stale pre-mode value.
+              id(preheat_last_applied_effective_start) = -1000000;
+            } else {
+              auto call = id(ch_climate).make_call();
+              call.set_target_temperature(id(mode_saved_target));
+              call.perform();
+            }
+          } else if (next == "Eco") {
+            float t = std::max(min_t, std::min(max_t, id(mode_saved_target) - (float) ${eco_setback}));
+            auto call = id(ch_climate).make_call();
+            call.set_target_temperature(t);
+            call.perform();
+          } else if (next == "Away") {
+            float t = std::max(min_t, std::min(max_t, id(mode_saved_target) - (float) ${away_setback}));
+            auto call = id(ch_climate).make_call();
+            call.set_target_temperature(t);
+            call.perform();
+          } else if (next == "Holiday") {
+            float t = std::max(min_t, std::min(max_t, (float) ${holiday_target}));
+            auto call = id(ch_climate).make_call();
+            call.set_target_temperature(t);
+            call.perform();
+          }
+          ESP_LOGI("mode", "Operation Mode changed: %s -> %s", prev.c_str(), next.c_str());
 
 number:
   - platform: opentherm
