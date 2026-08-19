@@ -1,0 +1,10 @@
+{
+  "domain": "opentherm_schedule",
+  "name": "OpenTherm Heating Schedule",
+  "version": "0.1.0",
+  "documentation": "https://github.com/jkautomation01/ESPHome-opentherm",
+  "issue_tracker": "https://github.com/jkautomation01/ESPHome-opentherm/issues",
+  "codeowners": [],
+  "iot_class": "calculated",
+  "config_flow": false
+}

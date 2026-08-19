@@ -1,0 +1,71 @@
+set_preset:
+  name: Set preset
+  description: Create or update a named heating preset. Updating an existing preset's temperature instantly changes every schedule block that uses it.
+  fields:
+    preset_id:
+      name: Preset ID
+      description: Slug identifying the preset (e.g. "home", "boost"). Creates a new preset if it doesn't exist yet.
+      required: true
+      example: "boost"
+      selector:
+        text:
+    name:
+      name: Display name
+      description: Shown in the card and the entity's attributes.
+      required: true
+      example: "Boost"
+      selector:
+        text:
+    icon:
+      name: Icon
+      description: mdi icon for this preset.
+      example: "mdi:fire"
+      selector:
+        icon:
+    temperature:
+      name: Temperature
+      description: Target room temperature (°C) for this preset.
+      required: true
+      example: 22
+      selector:
+        number:
+          min: 5
+          max: 30
+          step: 0.5
+          unit_of_measurement: "°C"
+
+set_week:
+  name: Set week
+  description: Bulk-replace the active weekly schedule. Each day needs at least one block; the first block of each day always covers from 00:00 regardless of the start time given.
+  fields:
+    schedule:
+      name: Schedule
+      description: Object keyed by weekday (monday..sunday), each a list of {start, preset} blocks.
+      required: true
+      selector:
+        object:
+
+propose_schedule:
+  name: Propose schedule
+  description: Store a proposed weekly schedule without applying it, for the card to show as a diff. Intended for the learning automation, not manual use.
+  fields:
+    schedule:
+      name: Schedule
+      description: Same shape as set_week's schedule.
+      required: true
+      selector:
+        object:
+    reason:
+      name: Reason
+      description: Optional human-readable note on why this was proposed.
+      example: "Tuesdays you usually raise to Home around 18:00"
+      selector:
+        text:
+
+accept_proposal:
+  name: Accept proposal
+  description: Apply the pending proposed schedule and clear it.
+
+reject_proposal:
+  name: Reject proposal
+  description: Discard the pending proposed schedule without applying it.

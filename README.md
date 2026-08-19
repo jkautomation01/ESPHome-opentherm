@@ -323,6 +323,39 @@ tied to real entity state, not decorative.
   alongside the schedule (it'll just get overridden again at the next
   scheduled slot boundary, same as a manual card change).
 
+## Smart Schedule (multi-level, learning) — in progress
+
+A from-scratch Home Assistant integration purpose-built for this project,
+replacing the 2-level `schedule.heating_comfort` helper above with a
+proper named-preset weekly schedule (Home/Away/Sleep/Boost by default,
+any number of presets) plus a learning pipeline that watches your manual
+thermostat-card adjustments and proposes schedule updates for you to
+accept or reject — a real "actually learns your routine" thermostat
+rather than a fixed weekly grid.
+
+Status: the integration itself (`home_assistant/custom_components/
+opentherm_schedule/`) is in — one entity,
+`opentherm_schedule.heating_comfort`, storage-backed like a built-in
+helper, with `set_preset` / `set_week` / `propose_schedule` /
+`accept_proposal` / `reject_proposal` services (see its `services.yaml`
+for the full field list). It is **not yet wired to the firmware** —
+`opentherm-thermostat.yaml` still reads the 2-level
+`schedule.heating_comfort` helper for now. Still to come: the firmware
+cutover to this entity, a custom Lovelace card (weekly grid, paint a
+preset onto it, proposal shown as a diff overlay you accept/reject), and
+the override-logging + nightly clustering automation that actually
+generates proposals.
+
+To install what exists so far: copy
+`home_assistant/custom_components/opentherm_schedule/` into this HA
+install's `custom_components/` directory, add `opentherm_schedule:` to
+your config (a package file works, same as any other integration), and
+restart Home Assistant — new `custom_components` are only picked up on
+restart, unlike YAML packages/templates. After restart,
+`opentherm_schedule.heating_comfort` should appear in Developer Tools →
+States, seeded with a starting schedule (Home 06:30–09:00 and
+17:00–22:30, Away in between, Sleep overnight).
+
 ## Backup control (no Home Assistant required)
 
 Three independent layers, from "HA had a hiccup" to "everything is down":
