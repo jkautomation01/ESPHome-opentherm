@@ -177,6 +177,24 @@ substitutions:
 esphome:
   name: ${name}
   friendly_name: ${friendly_name}
+  # Restore the heating climate's HEAT/OFF mode from ch_mode_on (see
+  # globals: below) — the PID climate component has no restore_mode of
+  # its own, so it always cold-boots into HEAT otherwise, silently
+  # re-enabling heating after a reflash/brownout/restart even if it had
+  # been deliberately left off.
+  on_boot:
+    then:
+      - if:
+          condition:
+            lambda: "return id(ch_mode_on);"
+          then:
+            - climate.control:
+                id: ch_climate
+                mode: "HEAT"
+          else:
+            - climate.control:
+                id: ch_climate
+                mode: "OFF"
 
 esp32:
   board: wemos_d1_mini32
@@ -192,16 +210,27 @@ api:
     key: !secret api_encryption_key
   on_client_connected:
     - script.stop: engage_backup_mode
+    # Only force the climate back to HEAT if we're actually recovering
+    # from an engaged backup mode (checked before the reset below clears
+    # it) — otherwise this fires on every ordinary boot's first connect
+    # too, silently overriding whatever mode the user had left the
+    # thermostat in (including a deliberate OFF) before a reflash,
+    # brownout, or restart.
+    - if:
+        condition:
+          lambda: "return id(backup_mode_active);"
+        then:
+          - climate.control:
+              id: ch_climate
+              mode: "HEAT"
+          - logger.log: "Home Assistant reconnected — resuming room-led control after backup mode"
     - globals.set:
         id: backup_mode_active
         value: "false"
     - lambda: |-
         id(ha_connected).publish_state(true);
         id(backup_mode_indicator).publish_state(false);
-    - climate.control:
-        id: ch_climate
-        mode: "HEAT"
-    - logger.log: "Home Assistant reconnected — resuming room-led control"
+    - logger.log: "Home Assistant reconnected"
   on_client_disconnected:
     - lambda: id(ha_connected).publish_state(false);
     - logger.log:
@@ -239,6 +268,17 @@ globals:
     type: bool
     restore_value: false
     initial_value: "false"
+
+  # Whether the heating climate should be HEAT (true) or OFF (false) —
+  # kept in sync with ch_climate.mode by the climate's on_state handler
+  # below, and restored on_boot further down. The PID climate component
+  # doesn't support restore_mode itself (it always cold-boots into HEAT),
+  # so without this, a reflash/brownout/restart would silently re-enable
+  # heating even if it was deliberately left off beforehand.
+  - id: ch_mode_on
+    type: bool
+    restore_value: true
+    initial_value: "true"
 
   # Room Sensor Glitch Guard state
   - id: glitch_guard_last_value
@@ -728,8 +768,14 @@ climate:
             - lambda: "return id(ch_climate).mode == CLIMATE_MODE_OFF;"
           then:
             - switch.turn_off: ch_enable
+            - globals.set:
+                id: ch_mode_on
+                value: "false"
           else:
             - switch.turn_on: ch_enable
+            - globals.set:
+                id: ch_mode_on
+                value: "true"
 
 binary_sensor:
   - platform: opentherm
