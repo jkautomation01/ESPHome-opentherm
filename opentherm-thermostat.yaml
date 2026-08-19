@@ -309,6 +309,40 @@ globals:
 interval:
   - interval: 60s
     then:
+      - if:
+          # Self-heal ha_connected / Backup Mode against the actual live
+          # API state. on_client_connected/on_client_disconnected (in the
+          # api: block above) are the fast path for these, but a missed
+          # trigger during rapid reconnect churn (e.g. a brownout reboot
+          # loop) can leave them stuck stale indefinitely with no other
+          # correction path — this reconciles them every cycle instead.
+          condition:
+            api.connected:
+          then:
+            - if:
+                condition:
+                  lambda: "return !id(ha_connected).state;"
+                then:
+                  - lambda: id(ha_connected).publish_state(true);
+            - script.stop: engage_backup_mode
+            - if:
+                condition:
+                  lambda: "return id(backup_mode_active);"
+                then:
+                  - globals.set:
+                      id: backup_mode_active
+                      value: "false"
+                  - lambda: id(backup_mode_indicator).publish_state(false);
+                  - climate.control:
+                      id: ch_climate
+                      mode: "HEAT"
+                  - logger.log: "Home Assistant connection reconciled — cleared stale backup mode"
+          else:
+            - if:
+                condition:
+                  lambda: "return id(ha_connected).state;"
+                then:
+                  - lambda: id(ha_connected).publish_state(false);
       - lambda: |-
           // Learn the room's heating rate while the boiler is actively
           // calling for heat, split by outdoor-temperature bucket and by
