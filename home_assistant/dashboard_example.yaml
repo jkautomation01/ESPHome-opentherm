@@ -29,7 +29,6 @@ views:
         dhw_active_entity: binary_sensor.opentherm_thermostat_hot_water_active
         flame_entity: binary_sensor.opentherm_thermostat_flame_on
         condensing_entity: binary_sensor.opentherm_thermostat_condensing_mode_active
-        modulation_entity: sensor.opentherm_thermostat_boiler_relative_modulation_level
         connected_entity: binary_sensor.opentherm_thermostat_home_assistant_connected
         backup_mode_entity: binary_sensor.opentherm_thermostat_backup_mode_active
 
@@ -62,16 +61,6 @@ views:
             name: Flow
           - entity: sensor.opentherm_thermostat_cv_return_line_temperature
             name: Return (external sensor — the boiler doesn't report its own)
-
-      - type: gauge
-        entity: sensor.opentherm_thermostat_boiler_relative_modulation_level
-        name: Modulation
-        min: 0
-        max: 100
-        severity:
-          green: 0
-          yellow: 60
-          red: 90
 
       - type: entities
         title: Backup & diagnostics

@@ -920,17 +920,15 @@ sensor:
   # *were* reliably read (cooling/CH2/electricity production, all
   # correctly "off") describe capabilities this system doesn't have anyway.
   #
-  # Kept: t_dhw currently reads 0 too, but DHW_TEMP is a core, near-
-  # universal Data-ID and the cW4's sensor is likely just idle (no tap
-  # open since the reflash) rather than unsupported — worth re-checking
-  # while hot water is actually running before writing it off.
+  # t_dhw and rel_mod_level removed too: confirmed against the OTGW
+  # equipment matrix (otgw.tclcode.com/matrix.cgi) that this boiler line
+  # (Intergas 28/24, cW4 board) doesn't support MsgID 26 (DHW temperature)
+  # or MsgID 17 (Relative Modulation Level) — both stayed frozen at their
+  # initial NACK'd value for 17+ hours in the field, including through a
+  # live hot-water draw, while t_boiler kept updating normally.
   - platform: opentherm
     t_boiler:
       name: "Boiler Flow Temperature"
-    t_dhw:
-      name: "Hot Water Temperature"
-    rel_mod_level:
-      name: "Boiler Relative Modulation Level"
     ch_pressure:
       name: "CH Water Pressure"
     oem_fault_code:

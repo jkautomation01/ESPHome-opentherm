@@ -367,13 +367,17 @@ each candidate had to be checked for physical plausibility against what
 the boiler was actually doing at the time.
 
 What survived that check and is in the firmware now: `t_boiler` (flow),
-`t_dhw`, `rel_mod_level`, `ch_pressure`, `oem_fault_code`, plus three
-newly-confirmed counters — `burner_starts`, `burner_operation_hours`,
-`dhw_burner_operation_hours` — which read plausible nonzero values (1692
-starts, 258 hours, 93 hours) and are genuinely useful for spotting
-short-cycling or tracking wear. `t_dhw` currently reads 0 too, but that's
-kept rather than pruned — DHW_TEMP is a near-universal Data-ID and the
-sensor is likely just idle (no tap open since the last reflash) rather
-than unsupported; worth re-checking while hot water is actually running.
-Everything else — including the entire "Slave Configuration" capability
-block, once its `dhw_present` flag turned out to be wrong — was removed.
+`ch_pressure`, `oem_fault_code`, plus three newly-confirmed counters —
+`burner_starts`, `burner_operation_hours`, `dhw_burner_operation_hours` —
+which read plausible nonzero values (1692 starts, 258 hours, 93 hours) and
+are genuinely useful for spotting short-cycling or tracking wear. `t_dhw`
+and `rel_mod_level` were kept initially on the theory that they were just
+idle (no tap open since the reflash), but stayed frozen at their initial
+NACK'd value for 17+ hours in the field, including through a live
+hot-water draw — cross-checked against the [OTGW equipment
+matrix](https://otgw.tclcode.com/matrix.cgi), which confirms this boiler
+line (Intergas 28/24, cW4 board) doesn't support MsgID 26 (DHW
+temperature) or MsgID 17 (Relative Modulation Level) — so both were
+removed too. Everything else — including the entire "Slave Configuration"
+capability block, once its `dhw_present` flag turned out to be wrong — was
+removed.
