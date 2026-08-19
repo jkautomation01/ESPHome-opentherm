@@ -483,6 +483,7 @@ script:
       - output.set_level:
           id: ch_setpoint_output
           level: !lambda 'return (${ch_fallback_setpoint} - ${ch_min_setpoint}) / (${ch_max_setpoint} - ${ch_min_setpoint});'
+      - lambda: id(ch_setpoint_sensor).publish_state(${ch_fallback_setpoint});
 
 # Enable OpenTherm communication with the boiler
 # https://esphome.io/components/opentherm.html
@@ -694,6 +695,7 @@ output:
               ((float) ${ch_max_setpoint} - (float) ${ch_min_setpoint});
           level = std::max(0.0f, std::min(1.0f, level));
           id(ch_setpoint_output).set_level(level);
+          id(ch_setpoint_sensor).publish_state(target);
 
 climate:
   - platform: pid
@@ -946,6 +948,22 @@ sensor:
     dhw_burner_operation_hours:
       name: "Hot Water Burner Operation Hours"
       entity_category: diagnostic
+
+  # The CH flow setpoint this firmware is actually commanding (target,
+  # not level) — published from ch_pid_scaling_output's write_action and
+  # from the backup-mode fallback, right where each computes its target
+  # in °C, so it always reflects exactly what was last sent to
+  # ch_setpoint_output. Compare against "Boiler Flow Temperature" (t_boiler,
+  # the boiler's own measured value) to tell a commanded-but-not-yet-reached
+  # setpoint apart from a genuinely wrong command.
+  - platform: template
+    name: "CH Setpoint"
+    id: ch_setpoint_sensor
+    unit_of_measurement: "°C"
+    accuracy_decimals: 1
+    device_class: temperature
+    state_class: measurement
+    icon: mdi:thermometer-lines
 
   - platform: wifi_signal
     name: "WiFi Signal"

@@ -54,11 +54,13 @@ views:
             name: Condensing
 
       - type: history-graph
-        title: Flow vs. return temperature
+        title: Setpoint vs. actual flow vs. return temperature
         hours_to_show: 24
         entities:
+          - entity: sensor.opentherm_thermostat_ch_setpoint
+            name: Setpoint (commanded)
           - entity: sensor.opentherm_thermostat_boiler_flow_temperature
-            name: Flow
+            name: Flow (measured)
           - entity: sensor.opentherm_thermostat_cv_return_line_temperature
             name: Return (external sensor — the boiler doesn't report its own)
 
