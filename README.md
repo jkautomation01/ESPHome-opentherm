@@ -79,13 +79,15 @@ plain room-led + weather-compensated control):
   20–30) if you're on underfloor heating rather than radiators — floor
   slabs coast for much longer.
 - **Preheat Schedule** (`switch.*_preheat_schedule`) — Nest's Time to
-  Temp / auto-schedule equivalent. Up to 4 time-of-day target-temperature
-  slots (`schedule_slot1_hour/minute/target` through `slot4`), started
-  early enough — based on the learned **bulk warm-up rate** — to hit each
-  slot's target right at its scheduled time rather than starting cold at
-  that exact minute. A manual change on the thermostat card is respected
-  until the next slot boundary, same as a normal scheduling thermostat.
-  Needs the `timezone` substitution set correctly for the schedule clock.
+  Temp / auto-schedule equivalent. Follows a Comfort/Setback weekly
+  schedule you edit in Home Assistant — the `schedule.heating_comfort`
+  helper (Settings → Helpers → Schedule) — no reflash needed, started
+  early enough — based on the learned **bulk warm-up rate** — to hit the
+  Comfort target right when the schedule intends rather than starting
+  cold at that exact minute. `schedule_comfort_target` and
+  `schedule_setback_target` set the two temperature levels. A manual
+  change on the thermostat card is respected until the next scheduled
+  transition, same as a normal scheduling thermostat.
 
 ### How the heating rate is learned
 
@@ -198,10 +200,14 @@ if you need to change any of them.
    - `room_temperature_entity_id` / `outdoor_temperature_entity_id` are
      already set to this install's actual Home Assistant entity IDs —
      update them here if either sensor ever changes.
-   - `timezone` and the four `schedule_slotN_hour`/`_minute`/`_target`
-     substitutions — your daily routine (defaults: 06:30→20°C,
-     09:00→17°C, 17:00→20°C, 22:30→16°C). Turn off the Preheat Schedule
-     switch after flashing if you'd rather set the target manually.
+   - `schedule_comfort_target` / `schedule_setback_target` — the two
+     temperature levels the `schedule.heating_comfort` helper switches
+     between. See `home_assistant/heating_comfort_schedule.yaml` for the
+     two things this needs on the Home Assistant side (the schedule
+     helper itself, plus a small template sensor) — the weekly
+     Comfort/Setback blocks live there, not in this file. Turn off the
+     Preheat Schedule switch after flashing if you'd rather set the
+     target manually.
    - Everything else (weather-curve points, condensing threshold, PID
      gains, setpoint ranges) has a sensible default — see "Tuning" below.
 2. `cp secrets.yaml.example secrets.yaml` and fill in your WiFi
@@ -273,12 +279,14 @@ tied to real entity state, not decorative.
   feature toggles: Room Sensor Glitch Guard, Anticipate Heating Coast,
   Preheat Schedule
 - `number` — Hot Water Setpoint (°C)
-- `sensor` — boiler flow temp, DHW temp, **CV Return Line Temperature
-  (your external sensor — the boiler's own return-temp reporting isn't
-  supported on this unit)**, modulation %, CH water pressure, OEM fault
-  code, burner starts/operation hours, DHW burner operation hours, WiFi
-  signal, uptime, **Learned Heating Rate (Bulk)**, **Learned Heating Rate
-  (Creep)**
+- `sensor` — boiler flow temp, **CH Setpoint** (the flow temperature
+  actually being commanded — compare against boiler flow temp to spot a
+  commanded-but-not-yet-reached setpoint vs. a genuinely wrong one), **CV
+  Return Line Temperature (your external sensor — the boiler's own
+  return-temp and DHW-temp/modulation reporting aren't supported on this
+  unit)**, CH water pressure, OEM fault code, burner starts/operation
+  hours, DHW burner operation hours, WiFi signal, uptime, **Learned
+  Heating Rate (Bulk)**, **Learned Heating Rate (Creep)**
 - `binary_sensor` — flame, heating/DHW active, boiler fault/diagnostic
   flags, **Condensing Mode Active**, **Home Assistant Connected**,
   **Backup Mode Active**, **Room Sensor Glitch Detected**
@@ -304,9 +312,12 @@ tied to real entity state, not decorative.
 - A window/door cutoff is pre-written but commented out in the firmware
   (search for "window/door cutoff" in `opentherm-thermostat.yaml`) — needs
   a `binary_sensor.*` entity ID filled in and uncommenting.
-- The built-in Preheat Schedule covers a fixed daily routine (4 slots).
-  For one-off exceptions (an away setback while on holiday, a "party
-  night" override), `climate.opentherm_thermostat_heating` is a
+- The built-in Preheat Schedule follows `schedule.heating_comfort`, edited
+  in Home Assistant (Settings → Helpers), including per-day blocks if you
+  want weekday/weekend variation — it's a two-level (Comfort/Setback)
+  schedule, though, not the four distinct levels the old hardcoded slots
+  supported. For one-off exceptions (an away setback while on holiday, a
+  "party night" override), `climate.opentherm_thermostat_heating` is a
   completely normal HA climate entity — a `climate.set_temperature` /
   `climate.set_hvac_mode` call from an ordinary HA automation works
   alongside the schedule (it'll just get overridden again at the next

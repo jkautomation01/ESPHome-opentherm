@@ -47,11 +47,13 @@
 #       the room nears target, based on a learned heating rate, so
 #       residual radiator/floor heat coasts the rest of the way instead of
 #       overshooting (equivalent to Nest's True Radiant).
-#     - "Preheat Schedule": up to 4 time-of-day target-temperature slots,
-#       started early enough (based on the same learned heating rate) to
-#       hit each slot's target right on time (equivalent to Nest's Time to
-#       Temp / auto-schedule). Manual changes via the thermostat card are
-#       respected until the next scheduled slot change.
+#     - "Preheat Schedule": follows a Comfort/Setback weekly schedule you
+#       edit in Home Assistant (the schedule.heating_comfort helper,
+#       Settings → Helpers) — no reflash needed — started early enough
+#       (based on the same learned heating rate) to hit the Comfort
+#       target right on time (equivalent to Nest's Time to Temp /
+#       auto-schedule). Manual changes via the thermostat card are
+#       respected until the next scheduled transition.
 
 substitutions:
   name: opentherm-thermostat
@@ -145,24 +147,16 @@ substitutions:
   heat_rate_array_size: "36"    # = heat_rate_cells * heat_rate_history_depth
   creep_phase_gap_threshold: "1.5"  # room-to-target gap (°C) below which a sample is "creep" rather than "bulk"
 
-  # Preheat Schedule (Time to Temp equivalent). Local timezone for the
-  # schedule clock, and up to 4 daily time-of-day target slots (24h
-  # hour/minute). Edit these to match your routine; a slot's target stays
-  # in effect until the next slot's (preheat-adjusted) start time.
-  timezone: "Europe/Amsterdam"
+  # Preheat Schedule (Time to Temp equivalent). The Comfort/Setback
+  # weekly time blocks live in Home Assistant now — the schedule.
+  # heating_comfort helper (Settings → Helpers → Schedule) — instead of
+  # being hardcoded here, so you can edit them without reflashing. These
+  # two substitutions are just the target temperature for each of that
+  # schedule's two levels, and how early (at most) the learned heating
+  # rate is allowed to start preheating before a Comfort block begins.
   preheat_max_lead_minutes: "180"
-  schedule_slot1_hour: "6"
-  schedule_slot1_minute: "30"
-  schedule_slot1_target: "20"
-  schedule_slot2_hour: "9"
-  schedule_slot2_minute: "0"
-  schedule_slot2_target: "17"
-  schedule_slot3_hour: "17"
-  schedule_slot3_minute: "0"
-  schedule_slot3_target: "20"
-  schedule_slot4_hour: "22"
-  schedule_slot4_minute: "30"
-  schedule_slot4_target: "16"
+  schedule_comfort_target: "20"
+  schedule_setback_target: "17"
 
   # Operation Mode (select entity: Normal/Eco/Away/Holiday). Eco/Away are
   # setbacks relative to whatever the target was in Normal mode; Holiday
@@ -258,11 +252,6 @@ captive_portal:
 web_server:
   version: 3
 
-time:
-  - platform: sntp
-    id: sntp_time
-    timezone: ${timezone}
-
 globals:
   - id: backup_mode_active
     type: bool
@@ -315,13 +304,14 @@ globals:
     restore_value: true
     initial_value: '{0,0,0,0,0,0}'
 
-  # Preheat Schedule state: the effective (preheat-adjusted) start minute
-  # of the last-applied slot, so re-applying the same slot every minute
-  # doesn't fight a manual thermostat-card change mid-slot.
-  - id: preheat_last_applied_effective_start
-    type: int
+  # Preheat Schedule state: the last resolved target (Comfort or
+  # Setback, from schedule.heating_comfort + the preheat lead time), so
+  # re-checking every minute doesn't fight a manual thermostat-card
+  # change until that resolved target actually changes.
+  - id: schedule_last_applied_target
+    type: float
     restore_value: false
-    initial_value: "-1000000"
+    initial_value: "NAN"
 
   # Operation Mode state: the target_temperature that was in effect the
   # last time mode was Normal (so Eco/Away/Holiday compute their setback
@@ -419,90 +409,81 @@ interval:
             id(heating_rate_prev_room_temp) = room_temp;
           }
       - lambda: |-
-          // Preheat Schedule: apply whichever of the 4 slots has the most
-          // recent preheat-adjusted start time at or before now, but only
-          // when the active slot actually changes — so a manual change on
-          // the thermostat card is respected until the next slot change.
-          // Only runs in Normal Operation Mode — Eco/Away/Holiday own the
+          // Preheat Schedule: follow schedule.heating_comfort (imported
+          // as heating_schedule_active) between Comfort and Setback, but
+          // start ramping toward Comfort early — using the learned bulk
+          // warm-up rate for the current outdoor bucket, same as before —
+          // so the room actually hits target around when the schedule
+          // intends, not only once the Comfort block starts. Only
+          // reapplies when the resolved target actually changes, so a
+          // manual thermostat-card change is respected until then. Only
+          // runs in Normal Operation Mode — Eco/Away/Holiday own the
           // target while active, and a schedule tick shouldn't silently
           // cancel a Holiday setting.
           if (!id(preheat_schedule_enabled).state) return;
           if (id(operation_mode_current) != "Normal") return;
-          if (!id(sntp_time).now().is_valid()) return;
 
-          auto now = id(sntp_time).now();
-          int now_min = now.hour * 60 + now.minute;
-          float room_temp = id(room_temperature).has_state()
-              ? id(room_temperature).state
-              : (float) ${default_room_target};
+          float target = id(heating_schedule_active).state
+              ? (float) ${schedule_comfort_target}
+              : (float) ${schedule_setback_target};
 
-          // Bulk warm-up rate (phase 0) for the current outdoor bucket,
-          // read back as the median of its history (see the ring-buffer
-          // write logic in the previous lambda).
-          float outdoor_now = id(outdoor_temperature).has_state()
-              ? id(outdoor_temperature).state
-              : (float) ${design_outdoor_temp};
-          float hr_bucket_width = ((float) ${heating_limit_outdoor_temp} - (float) ${design_outdoor_temp})
-              / (float) ${heat_rate_outdoor_buckets};
-          int hr_bucket = hr_bucket_width > 0
-              ? (int) ((outdoor_now - (float) ${design_outdoor_temp}) / hr_bucket_width)
-              : 0;
-          if (hr_bucket < 0) hr_bucket = 0;
-          if (hr_bucket > ${heat_rate_outdoor_buckets} - 1) hr_bucket = ${heat_rate_outdoor_buckets} - 1;
-          int hr_cell = 0 * ${heat_rate_outdoor_buckets} + hr_bucket;  // phase 0 = bulk
-          int hr_n = id(heat_rate_count)[hr_cell];
-          float rate;
-          if (hr_n == 0) {
-            rate = 0.05f;
-          } else {
-            float hr_samples[${heat_rate_history_depth}];
-            for (int i = 0; i < hr_n; i++) {
-              hr_samples[i] = id(heat_rate_history)[hr_cell * ${heat_rate_history_depth} + i];
+          if (!id(heating_schedule_active).state &&
+              id(minutes_to_comfort_start).has_state() &&
+              id(minutes_to_comfort_start).state >= 0) {
+            // Bulk warm-up rate (phase 0) for the current outdoor bucket,
+            // read back as the median of its history (see the ring-buffer
+            // write logic in the previous lambda).
+            float outdoor_now = id(outdoor_temperature).has_state()
+                ? id(outdoor_temperature).state
+                : (float) ${design_outdoor_temp};
+            float hr_bucket_width = ((float) ${heating_limit_outdoor_temp} - (float) ${design_outdoor_temp})
+                / (float) ${heat_rate_outdoor_buckets};
+            int hr_bucket = hr_bucket_width > 0
+                ? (int) ((outdoor_now - (float) ${design_outdoor_temp}) / hr_bucket_width)
+                : 0;
+            if (hr_bucket < 0) hr_bucket = 0;
+            if (hr_bucket > ${heat_rate_outdoor_buckets} - 1) hr_bucket = ${heat_rate_outdoor_buckets} - 1;
+            int hr_cell = 0 * ${heat_rate_outdoor_buckets} + hr_bucket;  // phase 0 = bulk
+            int hr_n = id(heat_rate_count)[hr_cell];
+            float rate;
+            if (hr_n == 0) {
+              rate = 0.05f;
+            } else {
+              float hr_samples[${heat_rate_history_depth}];
+              for (int i = 0; i < hr_n; i++) {
+                hr_samples[i] = id(heat_rate_history)[hr_cell * ${heat_rate_history_depth} + i];
+              }
+              for (int i = 1; i < hr_n; i++) {
+                float key = hr_samples[i];
+                int j = i - 1;
+                while (j >= 0 && hr_samples[j] > key) { hr_samples[j + 1] = hr_samples[j]; j--; }
+                hr_samples[j + 1] = key;
+              }
+              rate = hr_samples[hr_n / 2];
             }
-            for (int i = 1; i < hr_n; i++) {
-              float key = hr_samples[i];
-              int j = i - 1;
-              while (j >= 0 && hr_samples[j] > key) { hr_samples[j + 1] = hr_samples[j]; j--; }
-              hr_samples[j + 1] = key;
-            }
-            rate = hr_samples[hr_n / 2];
-          }
-          if (rate < 0.005f) rate = 0.005f;
+            if (rate < 0.005f) rate = 0.005f;
 
-          struct Slot { int start_min; float target; };
-          Slot slots[4] = {
-            {${schedule_slot1_hour} * 60 + ${schedule_slot1_minute}, ${schedule_slot1_target}},
-            {${schedule_slot2_hour} * 60 + ${schedule_slot2_minute}, ${schedule_slot2_target}},
-            {${schedule_slot3_hour} * 60 + ${schedule_slot3_minute}, ${schedule_slot3_target}},
-            {${schedule_slot4_hour} * 60 + ${schedule_slot4_minute}, ${schedule_slot4_target}},
-          };
-
-          int best_effective_start = -1000000;
-          float best_target = id(ch_climate).target_temperature;
-
-          for (int i = 0; i < 4; i++) {
-            float gap = slots[i].target - room_temp;
+            float room_temp = id(room_temperature).has_state()
+                ? id(room_temperature).state
+                : (float) ${schedule_comfort_target};
+            float gap = (float) ${schedule_comfort_target} - room_temp;
             float lead_min = gap > 0 ? (gap / rate) : 0;
             if (lead_min > (float) ${preheat_max_lead_minutes}) {
               lead_min = (float) ${preheat_max_lead_minutes};
             }
-            int effective_start = slots[i].start_min - (int) lead_min;
 
-            for (int offset = -1440; offset <= 0; offset += 1440) {
-              int es = effective_start + offset;
-              if (es <= now_min && es > best_effective_start) {
-                best_effective_start = es;
-                best_target = slots[i].target;
-              }
+            if (id(minutes_to_comfort_start).state <= lead_min) {
+              target = (float) ${schedule_comfort_target};
             }
           }
 
-          if (best_effective_start != id(preheat_last_applied_effective_start)) {
-            id(preheat_last_applied_effective_start) = best_effective_start;
+          if (isnan(id(schedule_last_applied_target)) ||
+              target != id(schedule_last_applied_target)) {
+            id(schedule_last_applied_target) = target;
             auto call = id(ch_climate).make_call();
-            call.set_target_temperature(best_target);
+            call.set_target_temperature(target);
             call.perform();
-            ESP_LOGI("preheat", "Schedule slot changed — target now %.1f°C", best_target);
+            ESP_LOGI("preheat", "Schedule target changed — target now %.1f°C", target);
           }
 
 script:
@@ -608,9 +589,9 @@ select:
           if (next == "Normal") {
             if (id(preheat_schedule_enabled).state) {
               // Let the next 60s tick immediately reapply the currently
-              // active schedule slot, rather than restoring a possibly
-              // stale pre-mode value.
-              id(preheat_last_applied_effective_start) = -1000000;
+              // resolved schedule target, rather than restoring a
+              // possibly stale pre-mode value.
+              id(schedule_last_applied_target) = NAN;
             } else {
               auto call = id(ch_climate).make_call();
               call.set_target_temperature(id(mode_saved_target));
@@ -829,6 +810,14 @@ binary_sensor:
         return {};
       }
 
+  # Preheat Schedule input: schedule.heating_comfort (Settings → Helpers
+  # in Home Assistant) drives Comfort/Setback — edit its weekly blocks
+  # there, no reflash needed. Paired with minutes_to_comfort_start below
+  # (sensor:) in the Preheat Schedule interval lambda above.
+  - platform: homeassistant
+    id: heating_schedule_active
+    entity_id: schedule.heating_comfort
+
   # Connectivity/backup-status visibility
   - platform: template
     name: "Home Assistant Connected"
@@ -926,6 +915,17 @@ sensor:
   - platform: homeassistant
     id: outdoor_temperature
     entity_id: ${outdoor_temperature_entity_id}
+
+  # Minutes until schedule.heating_comfort's next Comfort block starts
+  # (-1 while already in Comfort, or if unknown) — precomputed in Home
+  # Assistant (templates/opentherm_thermostat_schedule.yaml) from the
+  # schedule helper's next_event attribute, so the firmware doesn't have
+  # to parse an ISO-8601 datetime itself. Paired with
+  # heating_schedule_active above (binary_sensor:) in the Preheat
+  # Schedule interval lambda above.
+  - platform: homeassistant
+    id: minutes_to_comfort_start
+    entity_id: sensor.heating_comfort_minutes_to_start
 
   # External sensor on the CV return line — the ground truth for whether
   # the boiler is actually condensing, used by ch_pid_scaling_output to
