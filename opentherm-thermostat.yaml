@@ -47,13 +47,14 @@
 #       the room nears target, based on a learned heating rate, so
 #       residual radiator/floor heat coasts the rest of the way instead of
 #       overshooting (equivalent to Nest's True Radiant).
-#     - "Preheat Schedule": follows a Comfort/Setback weekly schedule you
-#       edit in Home Assistant (the schedule.heating_comfort helper,
-#       Settings → Helpers) — no reflash needed — started early enough
-#       (based on the same learned heating rate) to hit the Comfort
-#       target right on time (equivalent to Nest's Time to Temp /
-#       auto-schedule). Manual changes via the thermostat card are
-#       respected until the next scheduled transition.
+#     - "Preheat Schedule": follows a named-preset weekly schedule (Home/
+#       Away/Sleep/Boost/... — any number of levels) you edit in Home
+#       Assistant via the opentherm_schedule custom integration's card —
+#       no reflash needed — started early enough (based on the same
+#       learned heating rate) to hit a rising transition's target right
+#       on time (equivalent to Nest's Time to Temp / auto-schedule).
+#       Manual changes via the thermostat card are respected until the
+#       next scheduled transition.
 
 substitutions:
   name: opentherm-thermostat
@@ -147,16 +148,16 @@ substitutions:
   heat_rate_array_size: "36"    # = heat_rate_cells * heat_rate_history_depth
   creep_phase_gap_threshold: "1.5"  # room-to-target gap (°C) below which a sample is "creep" rather than "bulk"
 
-  # Preheat Schedule (Time to Temp equivalent). The Comfort/Setback
-  # weekly time blocks live in Home Assistant now — the schedule.
-  # heating_comfort helper (Settings → Helpers → Schedule) — instead of
-  # being hardcoded here, so you can edit them without reflashing. These
-  # two substitutions are just the target temperature for each of that
-  # schedule's two levels, and how early (at most) the learned heating
-  # rate is allowed to start preheating before a Comfort block begins.
+  # Preheat Schedule (Time to Temp equivalent). The named presets (Home/
+  # Away/Sleep/Boost/...) and the weekly schedule of which one applies
+  # when both live entirely in Home Assistant now — the
+  # opentherm_schedule custom integration (Settings → Helpers doesn't
+  # apply here; it's its own entity, opentherm_schedule.heating_comfort,
+  # edited via its Lovelace card) — so there's no hardcoded target list
+  # here at all any more, and no limit to how many levels a day can have.
+  # This substitution is just how early (at most) the learned heating
+  # rate is allowed to start preheating before a rising transition.
   preheat_max_lead_minutes: "180"
-  schedule_comfort_target: "20"
-  schedule_setback_target: "17"
 
   # Operation Mode (select entity: Normal/Eco/Away/Holiday). Eco/Away are
   # setbacks relative to whatever the target was in Normal mode; Holiday
@@ -304,10 +305,11 @@ globals:
     restore_value: true
     initial_value: '{0,0,0,0,0,0}'
 
-  # Preheat Schedule state: the last resolved target (Comfort or
-  # Setback, from schedule.heating_comfort + the preheat lead time), so
-  # re-checking every minute doesn't fight a manual thermostat-card
-  # change until that resolved target actually changes.
+  # Preheat Schedule state: the last resolved target (from
+  # opentherm_schedule.heating_comfort's current/next preset + the
+  # preheat lead time), so re-checking every minute doesn't fight a
+  # manual thermostat-card change until that resolved target actually
+  # changes.
   - id: schedule_last_applied_target
     type: float
     restore_value: false
@@ -409,27 +411,30 @@ interval:
             id(heating_rate_prev_room_temp) = room_temp;
           }
       - lambda: |-
-          // Preheat Schedule: follow schedule.heating_comfort (imported
-          // as heating_schedule_active) between Comfort and Setback, but
-          // start ramping toward Comfort early — using the learned bulk
-          // warm-up rate for the current outdoor bucket, same as before —
-          // so the room actually hits target around when the schedule
-          // intends, not only once the Comfort block starts. Only
-          // reapplies when the resolved target actually changes, so a
-          // manual thermostat-card change is respected until then. Only
-          // runs in Normal Operation Mode — Eco/Away/Holiday own the
-          // target while active, and a schedule tick shouldn't silently
-          // cancel a Holiday setting.
+          // Preheat Schedule: track opentherm_schedule.heating_comfort's
+          // current target directly (schedule_current_target — a plain
+          // number now, computed in Home Assistant from whichever named
+          // preset applies, so this works for any number of levels, not
+          // just Comfort/Setback). Starts ramping toward the *next*
+          // preset's target early — using the learned bulk warm-up rate
+          // for the current outdoor bucket — only when that transition
+          // is a rise (more heat needed) and only close enough to it
+          // that lead time actually matters. Only reapplies when the
+          // resolved target actually changes, so a manual thermostat-
+          // card change is respected until then. Only runs in Normal
+          // Operation Mode — Eco/Away/Holiday own the target while
+          // active, and a schedule tick shouldn't silently cancel a
+          // Holiday setting.
           if (!id(preheat_schedule_enabled).state) return;
           if (id(operation_mode_current) != "Normal") return;
+          if (!id(schedule_current_target).has_state()) return;
 
-          float target = id(heating_schedule_active).state
-              ? (float) ${schedule_comfort_target}
-              : (float) ${schedule_setback_target};
+          float target = id(schedule_current_target).state;
 
-          if (!id(heating_schedule_active).state &&
-              id(minutes_to_comfort_start).has_state() &&
-              id(minutes_to_comfort_start).state >= 0) {
+          bool rising = id(schedule_next_target).has_state() &&
+              id(schedule_next_target).state > target;
+          if (rising && id(schedule_minutes_to_next_change).has_state() &&
+              id(schedule_minutes_to_next_change).state >= 0) {
             // Bulk warm-up rate (phase 0) for the current outdoor bucket,
             // read back as the median of its history (see the ring-buffer
             // write logic in the previous lambda).
@@ -465,15 +470,15 @@ interval:
 
             float room_temp = id(room_temperature).has_state()
                 ? id(room_temperature).state
-                : (float) ${schedule_comfort_target};
-            float gap = (float) ${schedule_comfort_target} - room_temp;
+                : target;
+            float gap = id(schedule_next_target).state - room_temp;
             float lead_min = gap > 0 ? (gap / rate) : 0;
             if (lead_min > (float) ${preheat_max_lead_minutes}) {
               lead_min = (float) ${preheat_max_lead_minutes};
             }
 
-            if (id(minutes_to_comfort_start).state <= lead_min) {
-              target = (float) ${schedule_comfort_target};
+            if (id(schedule_minutes_to_next_change).state <= lead_min) {
+              target = id(schedule_next_target).state;
             }
           }
 
@@ -810,14 +815,6 @@ binary_sensor:
         return {};
       }
 
-  # Preheat Schedule input: schedule.heating_comfort (Settings → Helpers
-  # in Home Assistant) drives Comfort/Setback — edit its weekly blocks
-  # there, no reflash needed. Paired with minutes_to_comfort_start below
-  # (sensor:) in the Preheat Schedule interval lambda above.
-  - platform: homeassistant
-    id: heating_schedule_active
-    entity_id: schedule.heating_comfort
-
   # Connectivity/backup-status visibility
   - platform: template
     name: "Home Assistant Connected"
@@ -916,16 +913,24 @@ sensor:
     id: outdoor_temperature
     entity_id: ${outdoor_temperature_entity_id}
 
-  # Minutes until schedule.heating_comfort's next Comfort block starts
-  # (-1 while already in Comfort, or if unknown) — precomputed in Home
-  # Assistant (templates/opentherm_thermostat_schedule.yaml) from the
-  # schedule helper's next_event attribute, so the firmware doesn't have
-  # to parse an ISO-8601 datetime itself. Paired with
-  # heating_schedule_active above (binary_sensor:) in the Preheat
-  # Schedule interval lambda above.
+  # Preheat Schedule inputs — all three straight off the
+  # opentherm_schedule custom integration's single entity
+  # (opentherm_schedule.heating_comfort), which already resolves
+  # whichever named preset applies into plain numbers, so nothing here
+  # needs to know preset names or parse datetimes. See the Preheat
+  # Schedule interval lambda above for how these three combine.
   - platform: homeassistant
-    id: minutes_to_comfort_start
-    entity_id: sensor.heating_comfort_minutes_to_start
+    id: schedule_current_target
+    entity_id: opentherm_schedule.heating_comfort
+    attribute: current_target_temperature
+  - platform: homeassistant
+    id: schedule_next_target
+    entity_id: opentherm_schedule.heating_comfort
+    attribute: next_target_temperature
+  - platform: homeassistant
+    id: schedule_minutes_to_next_change
+    entity_id: opentherm_schedule.heating_comfort
+    attribute: minutes_to_next_change
 
   # External sensor on the CV return line — the ground truth for whether
   # the boiler is actually condensing, used by ch_pid_scaling_output to

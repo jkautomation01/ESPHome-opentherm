@@ -79,15 +79,18 @@ plain room-led + weather-compensated control):
   20–30) if you're on underfloor heating rather than radiators — floor
   slabs coast for much longer.
 - **Preheat Schedule** (`switch.*_preheat_schedule`) — Nest's Time to
-  Temp / auto-schedule equivalent. Follows a Comfort/Setback weekly
-  schedule you edit in Home Assistant — the `schedule.heating_comfort`
-  helper (Settings → Helpers → Schedule) — no reflash needed, started
-  early enough — based on the learned **bulk warm-up rate** — to hit the
-  Comfort target right when the schedule intends rather than starting
-  cold at that exact minute. `schedule_comfort_target` and
-  `schedule_setback_target` set the two temperature levels. A manual
-  change on the thermostat card is respected until the next scheduled
-  transition, same as a normal scheduling thermostat.
+  Temp / auto-schedule equivalent. Follows a named-preset weekly
+  schedule (Home/Away/Sleep/Boost by default, any number of levels) you
+  edit via the `opentherm_schedule` custom integration's card — see
+  "Smart Schedule" below — no reflash needed, started early enough —
+  based on the learned **bulk warm-up rate** — to hit a rising
+  transition's target right when the schedule intends rather than
+  starting cold at that exact minute. The firmware itself no longer
+  knows any preset names or temperatures; it just imports three plain
+  numbers (current target, next target, minutes to next change) that
+  the integration resolves. A manual change on the thermostat card is
+  respected until the next scheduled transition, same as a normal
+  scheduling thermostat.
 
 ### How the heating rate is learned
 
@@ -200,13 +203,10 @@ if you need to change any of them.
    - `room_temperature_entity_id` / `outdoor_temperature_entity_id` are
      already set to this install's actual Home Assistant entity IDs —
      update them here if either sensor ever changes.
-   - `schedule_comfort_target` / `schedule_setback_target` — the two
-     temperature levels the `schedule.heating_comfort` helper switches
-     between. See `home_assistant/heating_comfort_schedule.yaml` for the
-     two things this needs on the Home Assistant side (the schedule
-     helper itself, plus a small template sensor) — the weekly
-     Comfort/Setback blocks live there, not in this file. Turn off the
-     Preheat Schedule switch after flashing if you'd rather set the
+   - Preset temperatures and the weekly schedule aren't in this file at
+     all — see "Smart Schedule" below for the `opentherm_schedule`
+     custom integration this needs on the Home Assistant side. Turn off
+     the Preheat Schedule switch after flashing if you'd rather set the
      target manually.
    - Everything else (weather-curve points, condensing threshold, PID
      gains, setpoint ranges) has a sensible default — see "Tuning" below.
@@ -312,12 +312,11 @@ tied to real entity state, not decorative.
 - A window/door cutoff is pre-written but commented out in the firmware
   (search for "window/door cutoff" in `opentherm-thermostat.yaml`) — needs
   a `binary_sensor.*` entity ID filled in and uncommenting.
-- The built-in Preheat Schedule follows `schedule.heating_comfort`, edited
-  in Home Assistant (Settings → Helpers), including per-day blocks if you
-  want weekday/weekend variation — it's a two-level (Comfort/Setback)
-  schedule, though, not the four distinct levels the old hardcoded slots
-  supported. For one-off exceptions (an away setback while on holiday, a
-  "party night" override), `climate.opentherm_thermostat_heating` is a
+- The built-in Preheat Schedule follows `opentherm_schedule.heating_comfort`
+  (see "Smart Schedule" below), edited via its card, including per-day
+  blocks and as many named preset levels as you want. For one-off
+  exceptions (an away setback while on holiday, a "party night"
+  override), `climate.opentherm_thermostat_heating` is a
   completely normal HA climate entity — a `climate.set_temperature` /
   `climate.set_hvac_mode` call from an ordinary HA automation works
   alongside the schedule (it'll just get overridden again at the next
@@ -325,21 +324,19 @@ tied to real entity state, not decorative.
 
 ## Smart Schedule (multi-level, learning) — in progress
 
-A from-scratch Home Assistant integration purpose-built for this project,
-replacing the 2-level `schedule.heating_comfort` helper above with a
-proper named-preset weekly schedule (Home/Away/Sleep/Boost by default,
+A from-scratch Home Assistant integration purpose-built for this project:
+a proper named-preset weekly schedule (Home/Away/Sleep/Boost by default,
 any number of presets) plus a learning pipeline that watches your manual
 thermostat-card adjustments and proposes schedule updates for you to
 accept or reject — a real "actually learns your routine" thermostat
-rather than a fixed weekly grid.
+rather than a fixed weekly grid. This is what drives Preheat Schedule
+above; the firmware itself no longer has any notion of preset names or
+temperatures.
 
-Status: the integration and its card are in. It is **not yet wired to
-the firmware** — `opentherm-thermostat.yaml` still reads the 2-level
-`schedule.heating_comfort` helper for now. Still to come: the firmware
-cutover to this entity, and the override-logging + nightly clustering
-automation that actually generates proposals (the entity and card
-already support showing/accepting a proposal — nothing produces one
-yet).
+Status: the integration, its card, and the firmware cutover are all in.
+Still to come: the override-logging + nightly clustering automation that
+actually generates proposals (the entity and card already support
+showing/accepting a proposal — nothing produces one yet).
 
 **The integration** (`home_assistant/custom_components/opentherm_schedule/`)
 — one entity, `opentherm_schedule.heating_comfort`, storage-backed like a

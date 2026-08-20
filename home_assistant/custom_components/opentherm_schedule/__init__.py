@@ -214,6 +214,7 @@ class OpenThermScheduleEntity(Entity):
         self._current_preset = current_preset
 
         current_target = presets.get(current_preset, {}).get("temperature") if current_preset else None
+        next_target = presets.get(next_preset, {}).get("temperature") if next_preset else None
         minutes_to_next = (next_dt - now).total_seconds() / 60 if next_dt else None
 
         self._attrs = {
@@ -221,6 +222,7 @@ class OpenThermScheduleEntity(Entity):
             "schedule": self._data["schedule"],
             "current_target_temperature": current_target,
             "next_preset": next_preset,
+            "next_target_temperature": next_target,
             "next_change": next_dt.isoformat() if next_dt else None,
             "minutes_to_next_change": round(minutes_to_next, 1) if minutes_to_next is not None else None,
             "has_proposal": self._data["proposed_schedule"] is not None,
