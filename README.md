@@ -333,28 +333,41 @@ thermostat-card adjustments and proposes schedule updates for you to
 accept or reject — a real "actually learns your routine" thermostat
 rather than a fixed weekly grid.
 
-Status: the integration itself (`home_assistant/custom_components/
-opentherm_schedule/`) is in — one entity,
-`opentherm_schedule.heating_comfort`, storage-backed like a built-in
-helper, with `set_preset` / `set_week` / `propose_schedule` /
-`accept_proposal` / `reject_proposal` services (see its `services.yaml`
-for the full field list). It is **not yet wired to the firmware** —
-`opentherm-thermostat.yaml` still reads the 2-level
+Status: the integration and its card are in. It is **not yet wired to
+the firmware** — `opentherm-thermostat.yaml` still reads the 2-level
 `schedule.heating_comfort` helper for now. Still to come: the firmware
-cutover to this entity, a custom Lovelace card (weekly grid, paint a
-preset onto it, proposal shown as a diff overlay you accept/reject), and
-the override-logging + nightly clustering automation that actually
-generates proposals.
+cutover to this entity, and the override-logging + nightly clustering
+automation that actually generates proposals (the entity and card
+already support showing/accepting a proposal — nothing produces one
+yet).
 
-To install what exists so far: copy
-`home_assistant/custom_components/opentherm_schedule/` into this HA
-install's `custom_components/` directory, add `opentherm_schedule:` to
-your config (a package file works, same as any other integration), and
-restart Home Assistant — new `custom_components` are only picked up on
-restart, unlike YAML packages/templates. After restart,
+**The integration** (`home_assistant/custom_components/opentherm_schedule/`)
+— one entity, `opentherm_schedule.heating_comfort`, storage-backed like a
+built-in helper, with `set_preset` / `set_week` / `propose_schedule` /
+`accept_proposal` / `reject_proposal` services (see its `services.yaml`
+for the full field list). To install: copy the directory into this HA
+install's `custom_components/`, add `opentherm_schedule:` to your config
+(a package file works, same as any other integration), and restart Home
+Assistant — new `custom_components` are only picked up on restart,
+unlike YAML packages/templates. After restart,
 `opentherm_schedule.heating_comfort` should appear in Developer Tools →
 States, seeded with a starting schedule (Home 06:30–09:00 and
 17:00–22:30, Away in between, Sleep overnight).
+
+**The card** (`home_assistant/www/opentherm-schedule-card.js`) — a weekly
+grid, one horizontal bar per day. Tap a preset chip to select it as the
+paint "pen," then drag across a day's bar to paint that time range;
+edits stage locally until you tap Save (`set_week`) or Discard. Tap a
+chip's temperature to edit it inline — that's immediate, no Save needed,
+and updates every block using that preset at once. "+" adds a new
+preset. When a proposal is pending, differing ranges show as a hatched
+overlay in the proposed preset's color, with Accept/Reject controls.
+Same install steps as the thermostat card (copy into `www/`, add as a
+Lovelace resource):
+```yaml
+- type: custom:opentherm-schedule-card
+  entity: opentherm_schedule.heating_comfort
+```
 
 ## Backup control (no Home Assistant required)
 

@@ -35,6 +35,13 @@ views:
       # - type: thermostat
       #   entity: climate.opentherm_thermostat_heating
 
+      # Smart Schedule card — see the "Smart Schedule" section in the main
+      # README, and home_assistant/custom_components/opentherm_schedule/,
+      # for what this drives. Same install steps as the card above (copy
+      # the .js into www/, add it as a resource).
+      - type: custom:opentherm-schedule-card
+        entity: opentherm_schedule.heating_comfort
+
       - type: entities
         title: Hot water
         entities:
