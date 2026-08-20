@@ -506,6 +506,7 @@ class OpenThermScheduleCard extends HTMLElement {
       }
       .proposal-bar.show { display: flex; }
       .proposal-bar ha-icon { --mdc-icon-size: 18px; color: var(--info-color, #5c9bd1); }
+      #proposal-text { white-space: pre-line; }
       .spacer { flex: 1; }
 
       .pill {

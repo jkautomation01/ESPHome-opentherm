@@ -22,6 +22,21 @@ Services (domain: opentherm_schedule):
   - accept_proposal(): merge the pending proposed_schedule into the
     active schedule and clear it.
   - reject_proposal(): discard the pending proposed_schedule.
+  - analyze_overrides(): run the override-clustering pass immediately
+    instead of waiting for the nightly schedule. Mainly for testing.
+
+Learning pipeline (opt-in via the `climate_entity` config option):
+  Every human-initiated change to that climate entity's target temperature
+  (context.user_id is not None — excludes changes the ESPHome device itself
+  makes when applying the schedule, since those carry no user context) is
+  logged with the day/time and which preset was active. Once nightly (or
+  on demand via analyze_overrides), overrides are bucketed by
+  (weekday, 30-minute slot); a bucket that has accumulated enough samples,
+  points consistently away from the currently-scheduled preset, and lands
+  near an existing preset's temperature becomes a proposed_schedule block
+  swap — surfaced the same way as any other proposal. This log lives in
+  this integration's own storage, not the recorder, so it isn't subject to
+  recorder purge settings.
 """
 
 from __future__ import annotations
@@ -29,15 +44,20 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime, timedelta
 import logging
+import statistics
 
 import voluptuous as vol
 
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import Event, HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.entity_component import EntityComponent
-from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.event import (
+    async_track_state_change_event,
+    async_track_time_change,
+    async_track_time_interval,
+)
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.typing import ConfigType
 import homeassistant.util.dt as dt_util
@@ -81,7 +101,35 @@ DEFAULT_DATA = {
     "proposed_schedule": None,
     "proposed_at": None,
     "proposed_reason": None,
+    "overrides": [],
+    "last_analysis_at": None,
 }
+
+OVERRIDE_SLOT_MINUTES = 30
+MAX_LOGGED_OVERRIDES = 2000
+
+CONFIG_SCHEMA = vol.Schema(
+    {
+        DOMAIN: vol.Schema(
+            {
+                # Climate entity to watch for human-initiated target-temperature
+                # changes. Optional — without it, the schedule/preset/proposal
+                # features above all still work, just without the learning loop.
+                vol.Optional("climate_entity"): cv.entity_id,
+                vol.Optional("min_override_samples", default=5): vol.All(
+                    vol.Coerce(int), vol.Range(min=2)
+                ),
+                vol.Optional("override_lookback_days", default=30): vol.All(
+                    vol.Coerce(int), vol.Range(min=7)
+                ),
+                vol.Optional("min_override_delta", default=0.5): vol.Coerce(float),
+                vol.Optional("preset_match_tolerance", default=1.5): vol.Coerce(float),
+                vol.Optional("analysis_time", default="03:17:00"): cv.time,
+            }
+        )
+    },
+    extra=vol.ALLOW_EXTRA,
+)
 
 _BLOCK_SCHEMA = vol.Schema(
     {
@@ -97,6 +145,7 @@ SERVICE_SET_WEEK = "set_week"
 SERVICE_PROPOSE_SCHEDULE = "propose_schedule"
 SERVICE_ACCEPT_PROPOSAL = "accept_proposal"
 SERVICE_REJECT_PROPOSAL = "reject_proposal"
+SERVICE_ANALYZE_OVERRIDES = "analyze_overrides"
 
 SET_PRESET_SCHEMA = vol.Schema(
     {
@@ -178,6 +227,81 @@ def _resolve(
     return current_preset, None, None
 
 
+def _override_bucket(dt: datetime) -> tuple[str, int]:
+    """Return (weekday, slot_start_minutes) for a timestamp."""
+    weekday = WEEKDAYS[dt.weekday()]
+    slot = (dt.hour * 60 + dt.minute) // OVERRIDE_SLOT_MINUTES * OVERRIDE_SLOT_MINUTES
+    return weekday, slot
+
+
+def _analyze_overrides(
+    data: dict,
+    min_samples: int,
+    lookback_days: int,
+    min_delta: float,
+    tolerance: float,
+) -> tuple[dict | None, str | None]:
+    """Cluster logged overrides into a proposed schedule, if any pattern is strong enough."""
+    cutoff = dt_util.now() - timedelta(days=lookback_days)
+    recent = [o for o in data.get("overrides", []) if datetime.fromisoformat(o["at"]) >= cutoff]
+
+    buckets: dict[tuple[str, int], list[dict]] = {}
+    for o in recent:
+        buckets.setdefault((o["weekday"], o["slot"]), []).append(o)
+
+    presets = data["presets"]
+    proposed = deepcopy(data["schedule"])
+    changes: list[str] = []
+
+    for (weekday, slot), entries in sorted(buckets.items()):
+        if len(entries) < min_samples:
+            continue
+
+        median_temp = statistics.median(e["override_temp"] for e in entries)
+        current_preset = entries[-1]["preset"]
+        current_temp = presets.get(current_preset, {}).get("temperature") if current_preset else None
+        if current_temp is not None and abs(median_temp - current_temp) < min_delta:
+            continue  # already close enough to what's scheduled — not a real override pattern
+
+        reference = current_temp if current_temp is not None else median_temp
+        direction = median_temp - reference
+        if direction == 0:
+            continue
+        agree = sum(
+            1
+            for e in entries
+            if (e["override_temp"] - (presets.get(e["preset"], {}).get("temperature", reference) if e["preset"] else reference))
+            * direction
+            > 0
+        )
+        if agree / len(entries) < 0.7:
+            continue  # not a consistent direction — probably noise, not a pattern
+
+        best_preset, best_dist = None, None
+        for pid, p in presets.items():
+            dist = abs(p["temperature"] - median_temp)
+            if best_dist is None or dist < best_dist:
+                best_preset, best_dist = pid, dist
+        if best_preset is None or best_dist > tolerance or best_preset == current_preset:
+            continue
+
+        start = f"{slot // 60:02d}:{slot % 60:02d}"
+        day_blocks = [b for b in proposed[weekday] if b["start"] != start]
+        day_blocks.append({"start": start, "preset": best_preset})
+        proposed[weekday] = day_blocks
+        changes.append(
+            f"{weekday.title()} {start}: {len(entries)}x manual → ~{median_temp:.1f}°C, "
+            f"proposing {presets[best_preset]['name']}"
+        )
+
+    if not changes:
+        return None, None
+
+    normalized = _normalize_schedule(proposed, presets)
+    reason = "Learned from your manual adjustments:\n" + "\n".join(changes)
+    return normalized, reason
+
+
 class OpenThermScheduleEntity(Entity):
     """The single opentherm_schedule.heating_comfort entity."""
 
@@ -229,6 +353,8 @@ class OpenThermScheduleEntity(Entity):
             "proposed_schedule": self._data["proposed_schedule"],
             "proposed_at": self._data["proposed_at"],
             "proposed_reason": self._data["proposed_reason"],
+            "pending_override_count": len(self._data.get("overrides", [])),
+            "last_analysis_at": self._data.get("last_analysis_at"),
         }
 
     async def async_update_and_save(self) -> None:
@@ -242,9 +368,13 @@ class OpenThermScheduleEntity(Entity):
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    conf = config.get(DOMAIN, {})
+
     store: Store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
     stored = await store.async_load()
     data = stored if stored is not None else deepcopy(DEFAULT_DATA)
+    data.setdefault("overrides", [])
+    data.setdefault("last_analysis_at", None)
 
     component = EntityComponent[OpenThermScheduleEntity](_LOGGER, DOMAIN, hass)
     entity = OpenThermScheduleEntity(hass, store, data)
@@ -254,6 +384,82 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
     if stored is None:
         await store.async_save(data)
+
+    climate_entity = conf.get("climate_entity")
+    min_override_samples = conf.get("min_override_samples", 5)
+    override_lookback_days = conf.get("override_lookback_days", 30)
+    min_override_delta = conf.get("min_override_delta", 0.5)
+    preset_match_tolerance = conf.get("preset_match_tolerance", 1.5)
+    analysis_time = conf.get("analysis_time")
+
+    async def handle_climate_change(event: Event) -> None:
+        new_state = event.data.get("new_state")
+        old_state = event.data.get("old_state")
+        if new_state is None or old_state is None:
+            return
+        new_temp = new_state.attributes.get("temperature")
+        old_temp = old_state.attributes.get("temperature")
+        if new_temp is None or new_temp == old_temp:
+            return
+        if event.context.user_id is None:
+            # No human attached to this change — e.g. the ESPHome device
+            # itself applying the schedule's target. Not an override.
+            return
+
+        now = dt_util.now()
+        weekday, slot = _override_bucket(now)
+        preset, _, _ = _resolve(entity.data["schedule"], now)
+
+        entity.data["overrides"].append(
+            {
+                "at": now.isoformat(),
+                "weekday": weekday,
+                "slot": slot,
+                "preset": preset,
+                "override_temp": new_temp,
+            }
+        )
+        if len(entity.data["overrides"]) > MAX_LOGGED_OVERRIDES:
+            entity.data["overrides"] = entity.data["overrides"][-MAX_LOGGED_OVERRIDES:]
+        await entity.async_update_and_save()
+        _LOGGER.debug(
+            "Logged manual override: %s %s -> %.1f°C (preset was %s)", weekday, slot, new_temp, preset
+        )
+
+    if climate_entity:
+        async_track_state_change_event(hass, [climate_entity], handle_climate_change)
+    else:
+        _LOGGER.warning(
+            "opentherm_schedule: no climate_entity configured — manual-override "
+            "learning is disabled (schedule/presets/proposals still work)"
+        )
+
+    async def run_analysis(_now=None) -> None:
+        entity.data["last_analysis_at"] = dt_util.now().isoformat()
+        if entity.data["proposed_schedule"] is not None:
+            # Don't clobber a proposal that's still awaiting review.
+            await entity.async_update_and_save()
+            return
+        proposed, reason = _analyze_overrides(
+            entity.data,
+            min_override_samples,
+            override_lookback_days,
+            min_override_delta,
+            preset_match_tolerance,
+        )
+        if proposed is None:
+            await entity.async_update_and_save()
+            return
+        entity.data["proposed_schedule"] = proposed
+        entity.data["proposed_at"] = dt_util.now().isoformat()
+        entity.data["proposed_reason"] = reason
+        await entity.async_update_and_save()
+        hass.bus.async_fire(f"{DOMAIN}_proposal_created", {"reason": reason})
+
+    if analysis_time is not None:
+        async_track_time_change(
+            hass, run_analysis, hour=analysis_time.hour, minute=analysis_time.minute, second=analysis_time.second
+        )
 
     async def handle_set_preset(call: ServiceCall) -> None:
         preset_id = call.data["preset_id"]
@@ -292,6 +498,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         entity.data["proposed_reason"] = None
         await entity.async_update_and_save()
 
+    async def handle_analyze_overrides(call: ServiceCall) -> None:
+        await run_analysis()
+
     hass.services.async_register(DOMAIN, SERVICE_SET_PRESET, handle_set_preset, schema=SET_PRESET_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_SET_WEEK, handle_set_week, schema=SET_WEEK_SCHEMA)
     hass.services.async_register(
@@ -299,5 +508,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     )
     hass.services.async_register(DOMAIN, SERVICE_ACCEPT_PROPOSAL, handle_accept_proposal, schema=EMPTY_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_REJECT_PROPOSAL, handle_reject_proposal, schema=EMPTY_SCHEMA)
+    hass.services.async_register(
+        DOMAIN, SERVICE_ANALYZE_OVERRIDES, handle_analyze_overrides, schema=EMPTY_SCHEMA
+    )
 
     return True

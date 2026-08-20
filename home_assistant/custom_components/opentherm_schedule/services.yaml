@@ -69,3 +69,12 @@ accept_proposal:
 reject_proposal:
   name: Reject proposal
   description: Discard the pending proposed schedule without applying it.
+
+analyze_overrides:
+  name: Analyze overrides
+  description: >-
+    Run the manual-override clustering pass immediately instead of waiting
+    for the nightly schedule (set by the analysis_time config option).
+    Useful to test the learning pipeline without waiting until 3am. Does
+    nothing if a proposal is already pending review, or if there isn't
+    enough consistent override history yet.

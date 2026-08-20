@@ -322,7 +322,7 @@ tied to real entity state, not decorative.
   alongside the schedule (it'll just get overridden again at the next
   scheduled slot boundary, same as a manual card change).
 
-## Smart Schedule (multi-level, learning) — in progress
+## Smart Schedule (multi-level, learning)
 
 A from-scratch Home Assistant integration purpose-built for this project:
 a proper named-preset weekly schedule (Home/Away/Sleep/Boost by default,
@@ -333,23 +333,58 @@ rather than a fixed weekly grid. This is what drives Preheat Schedule
 above; the firmware itself no longer has any notion of preset names or
 temperatures.
 
-Status: the integration, its card, and the firmware cutover are all in.
-Still to come: the override-logging + nightly clustering automation that
-actually generates proposals (the entity and card already support
-showing/accepting a proposal — nothing produces one yet).
+Status: the integration, its card, the firmware cutover, and the
+learning pipeline (override-logging + nightly clustering) are all in.
 
 **The integration** (`home_assistant/custom_components/opentherm_schedule/`)
 — one entity, `opentherm_schedule.heating_comfort`, storage-backed like a
 built-in helper, with `set_preset` / `set_week` / `propose_schedule` /
-`accept_proposal` / `reject_proposal` services (see its `services.yaml`
-for the full field list). To install: copy the directory into this HA
-install's `custom_components/`, add `opentherm_schedule:` to your config
-(a package file works, same as any other integration), and restart Home
-Assistant — new `custom_components` are only picked up on restart,
-unlike YAML packages/templates. After restart,
-`opentherm_schedule.heating_comfort` should appear in Developer Tools →
-States, seeded with a starting schedule (Home 06:30–09:00 and
+`accept_proposal` / `reject_proposal` / `analyze_overrides` services (see
+its `services.yaml` for the full field list). To install: copy the
+directory into this HA install's `custom_components/`, add
+`opentherm_schedule:` to your config (a package file works, same as any
+other integration), and restart Home Assistant — new `custom_components`
+are only picked up on restart, unlike YAML packages/templates. After
+restart, `opentherm_schedule.heating_comfort` should appear in Developer
+Tools → States, seeded with a starting schedule (Home 06:30–09:00 and
 17:00–22:30, Away in between, Sleep overnight).
+
+**The learning pipeline** watches one climate entity (config option
+`climate_entity` — point it at `climate.opentherm_thermostat_heating`)
+for target-temperature changes that carry a real HA user context, i.e.
+someone actually adjusted the thermostat card/app/voice — changes the
+ESPHome device makes itself while applying the schedule carry no user
+context and are never logged as overrides. Every such override is
+recorded with its day-of-week, 30-minute time slot, and which preset was
+scheduled at the time, into the integration's own storage — not the
+recorder, so it's unaffected by `purge_keep_days`.
+
+Once a day (config option `analysis_time`, default 03:17) — or on demand
+via the `analyze_overrides` service, handy for testing — the log is
+clustered by (weekday, slot). A slot becomes a proposal only if it has
+accumulated enough samples (`min_override_samples`, default 5), those
+samples consistently point the same direction away from the scheduled
+preset (≥70% agreement) by at least `min_override_delta` (default
+0.5°C), and the median override temperature lands within
+`preset_match_tolerance` (default 1.5°C) of an existing preset's
+temperature — at which point that block is proposed to switch to that
+preset, surfaced via the card's diff overlay exactly like a manually
+proposed schedule. It deliberately never invents new presets or retunes
+an existing preset's temperature on its own; it only ever proposes
+reassigning which of your existing presets applies to a given slot, so
+every proposal stays within presets you already defined and reviewed.
+Nothing is ever applied without `accept_proposal`.
+
+Config example:
+```yaml
+opentherm_schedule:
+  climate_entity: climate.opentherm_thermostat_heating
+  min_override_samples: 5
+  override_lookback_days: 30
+  min_override_delta: 0.5
+  preset_match_tolerance: 1.5
+  analysis_time: "03:17:00"
+```
 
 **The card** (`home_assistant/www/opentherm-schedule-card.js`) — a weekly
 grid, one horizontal bar per day. Tap a preset chip to select it as the
