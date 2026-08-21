@@ -413,6 +413,11 @@ class OpenThermThermostatCard extends HTMLElement {
     const current = st.attributes.current_temperature;
     const target = this._dragging ? this._dragValue : st.attributes.temperature;
     const hvacOn = st.state !== "off";
+    // hvac_action distinguishes "mode is Heat" from "the boiler is
+    // actually being asked for heat right now" — mode alone stays Heat
+    // for as long as you leave the thermostat on, while action swings
+    // between heating and standby as the room passes target.
+    const heating = hvacOn && st.attributes.hvac_action === "heating";
     const flameOn = this._isOn(cfg.flame_entity);
 
     if (this._last.current !== current) {
@@ -423,10 +428,16 @@ class OpenThermThermostatCard extends HTMLElement {
       this._el.targetTemp.textContent = Number.isFinite(target) ? `${fmt1(target)}°` : "--°";
       this._last.target = target;
     }
-    if (this._last.hvacOn !== hvacOn) {
+    if (this._last.hvacOn !== hvacOn || this._last.heating !== heating) {
       this._el.center.classList.toggle("off", !hvacOn);
-      this._el.hint.textContent = hvacOn ? "tap ring to turn off" : "tap ring to turn on heat";
+      this._el.center.classList.toggle("standby", hvacOn && !heating);
+      this._el.hint.textContent = !hvacOn
+        ? "tap ring to turn on heat"
+        : heating
+        ? "Heating — tap ring to turn off"
+        : "Standby — tap ring to turn off";
       this._last.hvacOn = hvacOn;
+      this._last.heating = heating;
     }
     if (!this._dragging) {
       this._paintDial(current, target, flameOn);
@@ -553,6 +564,7 @@ class OpenThermThermostatCard extends HTMLElement {
         gap: 2px; cursor: pointer;
       }
       .center.off { opacity: 0.55; }
+      .center.standby .hint { color: #5c9bd1; opacity: 0.85; }
       .current { font-size: 2.1rem; font-weight: 300; color: var(--primary-text-color); line-height: 1; }
       .target-row { display: flex; align-items: center; gap: 8px; }
       .target { font-size: 1rem; color: var(--secondary-text-color); min-width: 46px; text-align: center; }

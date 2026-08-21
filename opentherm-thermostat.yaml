@@ -376,6 +376,21 @@ interval:
                 then:
                   - lambda: id(ha_connected).publish_state(false);
       - lambda: |-
+          // Reconcile ch_enable against the PID's actual action every
+          // cycle, as a safety net alongside the climate's on_state
+          // handler (belt-and-suspenders against ever missing a
+          // heat-stopped transition and leaving CH asserted for up to a
+          // minute longer than it should be).
+          bool should_heat = (id(ch_climate).mode != CLIMATE_MODE_OFF) &&
+              (id(ch_climate).action == CLIMATE_ACTION_HEATING);
+          if (should_heat != id(ch_enable).state) {
+            if (should_heat) {
+              id(ch_enable).turn_on();
+            } else {
+              id(ch_enable).turn_off();
+            }
+          }
+      - lambda: |-
           // Learn the room's heating rate while the boiler is actively
           // calling for heat, split by outdoor-temperature bucket and by
           // phase (bulk warm-up vs near-target creep), into a small
@@ -659,13 +674,15 @@ output:
           // min_flow_temp any time mode was Heat, so the boiler kept
           // firing to chase that setpoint even with the room way above
           // target.
+          // ch_enable itself is NOT set here — see the climate's on_state
+          // handler below for why (this write_action doesn't reliably
+          // re-run every cycle once its computed level repeats, so it's
+          // not a safe place to gate the CH-enable switch).
           if (id(ch_climate).mode == CLIMATE_MODE_OFF || state <= 0.0f) {
-            id(ch_enable).turn_off();
             id(ch_setpoint_output).set_level(0.0f);
             id(ch_setpoint_sensor).publish_state(0.0f);
             return;
           }
-          id(ch_enable).turn_on();
 
           float outdoor = id(outdoor_temperature).has_state()
               ? id(outdoor_temperature).state
@@ -763,6 +780,15 @@ climate:
       ki_multiplier: 0.15
       kd_multiplier: 0
       deadband_output_averaging_samples: 15
+    # ch_enable — the actual OpenTherm CH-enable bit sent to the boiler —
+    # is driven entirely from here, tied to the PID's own reported action
+    # rather than to climate mode alone (mode=Heat with zero PID output
+    # must not keep asking the boiler for heat) and rather than to
+    # ch_pid_scaling_output's write_action (that lambda only reliably
+    # re-runs when its computed level actually changes cycle to cycle, so
+    # it can miss turning ch_enable back off/on if the level repeats).
+    # on_state fires on every PID control cycle regardless, which makes it
+    # the reliable place for this.
     on_state:
       - if:
           condition:
@@ -773,15 +799,16 @@ climate:
                 id: ch_mode_on
                 value: "false"
           else:
-            # Don't turn_on ch_enable here — that would fire it any time
-            # mode is Heat, regardless of whether the PID actually wants
-            # heat. Whether the boiler is actually asked for CH is decided
-            # per control cycle in ch_pid_scaling_output's write_action,
-            # based on real demand (state > 0). This branch only tracks
-            # persisted mode for restore-on-boot.
             - globals.set:
                 id: ch_mode_on
                 value: "true"
+            - if:
+                condition:
+                  lambda: "return id(ch_climate).action == CLIMATE_ACTION_HEATING;"
+                then:
+                  - switch.turn_on: ch_enable
+                else:
+                  - switch.turn_off: ch_enable
 
 binary_sensor:
   - platform: opentherm
