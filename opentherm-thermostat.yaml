@@ -652,6 +652,21 @@ output:
     type: float
     write_action:
       - lambda: |-
+          // No PID demand right now (room at/above target, or mode is
+          // Off) — make sure the boiler actually sees "no CH request"
+          // instead of a small but nonzero flow setpoint at min_flow_temp.
+          // Without this, ch_enable stayed on and t_set stayed at
+          // min_flow_temp any time mode was Heat, so the boiler kept
+          // firing to chase that setpoint even with the room way above
+          // target.
+          if (id(ch_climate).mode == CLIMATE_MODE_OFF || state <= 0.0f) {
+            id(ch_enable).turn_off();
+            id(ch_setpoint_output).set_level(0.0f);
+            id(ch_setpoint_sensor).publish_state(0.0f);
+            return;
+          }
+          id(ch_enable).turn_on();
+
           float outdoor = id(outdoor_temperature).has_state()
               ? id(outdoor_temperature).state
               : (float) ${design_outdoor_temp};
@@ -758,7 +773,12 @@ climate:
                 id: ch_mode_on
                 value: "false"
           else:
-            - switch.turn_on: ch_enable
+            # Don't turn_on ch_enable here — that would fire it any time
+            # mode is Heat, regardless of whether the PID actually wants
+            # heat. Whether the boiler is actually asked for CH is decided
+            # per control cycle in ch_pid_scaling_output's write_action,
+            # based on real demand (state > 0). This branch only tracks
+            # persisted mode for restore-on-boot.
             - globals.set:
                 id: ch_mode_on
                 value: "true"
