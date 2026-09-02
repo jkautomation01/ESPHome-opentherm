@@ -1,0 +1,18 @@
+{
+  "editor_entity": "Entity",
+  "editor_name": "Name",
+  "editor_hide_name": "Hide name",
+  "editor_theme": "Theme",
+  "editor_step": "Step override",
+  "editor_pending": "Pending (seconds)",
+  "editor_ambient_temperature": "Ambient temperature sensor",
+  "editor_status_entity": "Status text entity",
+  "editor_readonly": "Read-only mode",
+  "editor_show_power_toggle": "Power button",
+  "editor_show_preset_indicator": "Preset icon",
+  "editor_dhw_entity": "Hot water entity",
+  "editor_window_entity": "Window/door sensor entity",
+  "editor_mode_select_entity": "Mode select entity",
+  "card_name": "OpenTherm Thermostat Dial",
+  "card_description": "Round-dial thermostat card for the ESPHome OpenTherm project — hot water, window, fault and mode badges, forked from thermostat-dark-card"
+}

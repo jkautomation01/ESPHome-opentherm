@@ -230,20 +230,73 @@ An example dashboard view is in `home_assistant/dashboard_example.yaml`.
 
 ## Custom Lovelace Card
 
-`home_assistant/www/opentherm-thermostat-card.js` is a custom card purpose-built
-for this device: a circular dial you can drag (or nudge with ±) to set the
-target temperature, the four Operation Mode chips, and animated tiles for
-flame, hot water, and condensing status. It's a plain Web Component — no
-build step, no npm, no external dependencies — so installing it is just
-copying one file:
+Two thermostat cards ship with this project — pick one (or install both
+and switch between them).
+
+### opentherm-thermostat-dial-card (primary)
+
+`home_assistant/www/opentherm-thermostat-dial-card.js` is a fork of
+[thermostat-dark-card](https://github.com/ciotlosm/lovelace-thermostat-dark-card)
+(MIT, Marius Ciotlos) — a polished round-dial thermostat card with
+dark/light/glassy/transparent themes — extended with a badges row (hot
+water, window/door, boiler problem) and a mode-chips row (Normal/Eco/Away/
+Holiday) below the dial. Source and build instructions live in
+`home_assistant/thermostat-dark-card/`; the committed `dist` build in
+`www/` means installing it needs no Node/npm, same as the other card:
+
+1. Copy `home_assistant/www/opentherm-thermostat-dial-card.js` into your
+   Home Assistant `config/www/` folder (create it if it doesn't exist).
+2. **Settings → Dashboards → ⋮ → Resources → Add Resource**:
+   - URL: `/local/opentherm-thermostat-dial-card.js`
+   - Resource type: **JavaScript Module**
+3. Add the card to a dashboard (YAML mode) — an example is already wired
+   into `home_assistant/dashboard_example.yaml`:
+   ```yaml
+   - type: custom:opentherm-thermostat-dial-card
+     entity: climate.opentherm_thermostat_heating
+     name: OpenTherm
+     theme: dark
+     dhw_entity: binary_sensor.opentherm_thermostat_hot_water_active
+     window_entity: binary_sensor.YOUR_WINDOW_SENSOR
+     mode_select_entity: select.opentherm_thermostat_operation_mode
+     problem_entities:
+       - binary_sensor.opentherm_thermostat_boiler_fault
+       - binary_sensor.opentherm_thermostat_boiler_diagnostic
+       - binary_sensor.opentherm_thermostat_service_required
+       - binary_sensor.opentherm_thermostat_lockout_reset
+       - binary_sensor.opentherm_thermostat_low_water_pressure_fault
+       - binary_sensor.opentherm_thermostat_flame_fault
+       - binary_sensor.opentherm_thermostat_air_pressure_fault
+       - binary_sensor.opentherm_thermostat_water_overtemperature
+   ```
+   Only `entity` is required — the badges row and mode-chips row each
+   simply don't render without their entities configured. See
+   `home_assistant/thermostat-dark-card/README.md` for the full option
+   list, including all the unmodified upstream dial options (`step`,
+   `pending`, `show_ticks`, `colors`, `status_entity`,
+   `ambient_temperature`, and more).
+
+The problem badge only appears at all while one of `problem_entities` is
+actually `on`; the hot water and window badges are always shown once
+configured, changing color/icon with state. Mode chips call
+`select.select_option` on tap.
+
+### opentherm-thermostat-card (original, alternative)
+
+`home_assistant/www/opentherm-thermostat-card.js` is the project's
+original hand-built card: a circular dial you can drag (or nudge with ±)
+to set the target temperature, the four Operation Mode chips, and
+animated tiles for flame, hot water, and condensing status. It's a plain
+Web Component — no build step, no npm, no external dependencies — so
+installing it is just copying one file:
 
 1. Copy `home_assistant/www/opentherm-thermostat-card.js` into your Home
    Assistant `config/www/` folder (create it if it doesn't exist).
 2. **Settings → Dashboards → ⋮ → Resources → Add Resource**:
    - URL: `/local/opentherm-thermostat-card.js`
    - Resource type: **JavaScript Module**
-3. Add the card to a dashboard (YAML mode) — an example is already wired
-   into `home_assistant/dashboard_example.yaml`:
+3. Add the card to a dashboard (YAML mode) — commented out in
+   `home_assistant/dashboard_example.yaml` alongside the primary card:
    ```yaml
    - type: custom:opentherm-thermostat-card
      climate_entity: climate.opentherm_thermostat_heating

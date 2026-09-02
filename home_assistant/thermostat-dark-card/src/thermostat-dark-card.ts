@@ -1,0 +1,21 @@
+import { CARD_VERSION } from './const';
+import { localize } from './localize/index';
+import './card/card';
+
+/* eslint-disable no-console */
+console.info(
+  `%c OPENTHERM-THERMOSTAT-DIAL-CARD %c v${CARD_VERSION} `,
+  'color: white; background: #555; font-weight: 700;',
+  'color: white; background: #e36304; font-weight: 700;',
+);
+/* eslint-enable no-console */
+
+// Register in HA card picker
+const customCards = (window as unknown as { customCards: unknown[] }).customCards ?? [];
+(window as unknown as { customCards: unknown[] }).customCards = customCards;
+customCards.push({
+  type: 'opentherm-thermostat-dial-card',
+  name: localize('card_name'),
+  description: localize('card_description'),
+  preview: true,
+});

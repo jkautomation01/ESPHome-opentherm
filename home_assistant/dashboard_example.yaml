@@ -17,20 +17,41 @@ views:
   - title: Heating
     path: opentherm
     cards:
-      # Custom card — see home_assistant/README.md "Custom Lovelace Card"
-      # for install steps (copy the .js into www/, add it as a resource).
-      # Falls back to the built-in `thermostat` card, commented below, if
-      # you'd rather not install a custom resource.
-      - type: custom:opentherm-thermostat-card
-        climate_entity: climate.opentherm_thermostat_heating
+      # Primary thermostat card — round dial, forked from
+      # thermostat-dark-card. See home_assistant/thermostat-dark-card/README.md
+      # for the fork's added config (dhw/window/problem badges, mode chips)
+      # and home_assistant/README.md "Custom Lovelace Card" for install
+      # steps (copy the .js into www/, add it as a resource).
+      - type: custom:opentherm-thermostat-dial-card
+        entity: climate.opentherm_thermostat_heating
+        name: OpenTherm
+        theme: dark
+        dhw_entity: binary_sensor.opentherm_thermostat_hot_water_active
+        window_entity: binary_sensor.woonkamer_raam_sensor_contact
         mode_select_entity: select.opentherm_thermostat_operation_mode
-        dhw_switch_entity: switch.opentherm_thermostat_hot_water
-        dhw_setpoint_entity: number.opentherm_thermostat_hot_water_setpoint
-        dhw_active_entity: binary_sensor.opentherm_thermostat_hot_water_active
-        flame_entity: binary_sensor.opentherm_thermostat_flame_on
-        condensing_entity: binary_sensor.opentherm_thermostat_condensing_mode_active
-        connected_entity: binary_sensor.opentherm_thermostat_home_assistant_connected
-        backup_mode_entity: binary_sensor.opentherm_thermostat_backup_mode_active
+        problem_entities:
+          - binary_sensor.opentherm_thermostat_boiler_fault
+          - binary_sensor.opentherm_thermostat_boiler_diagnostic
+          - binary_sensor.opentherm_thermostat_service_required
+          - binary_sensor.opentherm_thermostat_lockout_reset
+          - binary_sensor.opentherm_thermostat_low_water_pressure_fault
+          - binary_sensor.opentherm_thermostat_flame_fault
+          - binary_sensor.opentherm_thermostat_air_pressure_fault
+          - binary_sensor.opentherm_thermostat_water_overtemperature
+
+      # Original hand-built circular card (no-build-step vanilla JS,
+      # flame/hot-water animations) — kept as a lighter-weight alternative.
+      # See home_assistant/README.md "Custom Lovelace Card".
+      # - type: custom:opentherm-thermostat-card
+      #   climate_entity: climate.opentherm_thermostat_heating
+      #   mode_select_entity: select.opentherm_thermostat_operation_mode
+      #   dhw_switch_entity: switch.opentherm_thermostat_hot_water
+      #   dhw_setpoint_entity: number.opentherm_thermostat_hot_water_setpoint
+      #   dhw_active_entity: binary_sensor.opentherm_thermostat_hot_water_active
+      #   flame_entity: binary_sensor.opentherm_thermostat_flame_on
+      #   condensing_entity: binary_sensor.opentherm_thermostat_condensing_mode_active
+      #   connected_entity: binary_sensor.opentherm_thermostat_home_assistant_connected
+      #   backup_mode_entity: binary_sensor.opentherm_thermostat_backup_mode_active
 
       # - type: thermostat
       #   entity: climate.opentherm_thermostat_heating
