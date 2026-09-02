@@ -79,6 +79,14 @@ substitutions:
   room_temperature_entity_id: "sensor.woonkamer_temperatuur"
   outdoor_temperature_entity_id: "sensor.opentherm_thermostat_outside_temperature"
 
+  # Window/door cutoff: suspends heating while open, restores it on close
+  # — but only if it was actually on before the window opened (a
+  # deliberate manual Off beforehand stays off). See the window_open
+  # binary_sensor further down for the restore-only-if-was-on logic.
+  window_sensor_entity_id: "binary_sensor.woonkamer_raam_sensor_contact"
+  window_open_delay: "10s"   # debounce before treating it as genuinely open
+  window_close_delay: "30s"  # debounce before resuming heat after it closes
+
   # Central heating (CH) flow setpoint range ever sent to the boiler.
   ch_min_setpoint: "20"
   ch_max_setpoint: "80"
@@ -337,6 +345,16 @@ globals:
     type: std::string
     restore_value: true
     initial_value: '"Normal"'
+
+  # Window/door cutoff: whether the climate was actually in HEAT mode
+  # right before the window opened, so closing it only resumes heat when
+  # that's genuinely what should happen — a deliberate manual Off from
+  # before the window opened is left alone instead of being overridden
+  # back to HEAT on close. Doesn't need to survive a reboot.
+  - id: heat_was_on_before_window_open
+    type: bool
+    restore_value: false
+    initial_value: "false"
 
 interval:
   - interval: 60s
@@ -849,13 +867,19 @@ binary_sensor:
       entity_category: diagnostic
 
   # Diagnostic indicator: is the boiler currently in its efficient
-  # condensing range, based on the external return-line sensor?
+  # condensing range, based on the external return-line sensor. Only
+  # meaningful while the boiler is actually firing for CH — with no
+  # demand the return line just cools toward room temperature and would
+  # otherwise read as "condensing" despite not running at all.
   - platform: template
     name: "Condensing Mode Active"
     id: condensing_mode_active
     entity_category: diagnostic
     icon: mdi:leaf
     lambda: |-
+      if (!id(ch_active).state) {
+        return false;
+      }
       if (id(return_line_temperature).has_state()) {
         return id(return_line_temperature).state < ${condensing_threshold};
       } else {
@@ -904,19 +928,37 @@ binary_sensor:
           call.perform();
       - logger.log: "Backup heat button pressed — toggled heating climate locally"
 
-  # Optional: window/door cutoff. Uncomment and set your entity ID to force
-  # the heating climate off while open, and back to HEAT when it closes.
-  # - platform: homeassistant
-  #   id: window_open
-  #   entity_id: binary_sensor.YOUR_WINDOW_SENSOR
-  #   on_press:
-  #     - climate.control:
-  #         id: ch_climate
-  #         mode: "OFF"
-  #   on_release:
-  #     - climate.control:
-  #         id: ch_climate
-  #         mode: "HEAT"
+  # Window/door cutoff: suspends heating while window_sensor_entity_id
+  # reads open, resumes it on close — but only if heating was actually on
+  # right before it opened (heat_was_on_before_window_open, captured on
+  # open), so a genuine manual Off from before the window opened stays
+  # off instead of being silently re-enabled. delayed_on/delayed_off
+  # (window_open_delay/window_close_delay) debounce brief contact
+  # glitches and someone airing out a room in and out.
+  - platform: homeassistant
+    id: window_open
+    entity_id: ${window_sensor_entity_id}
+    filters:
+      - delayed_on: ${window_open_delay}
+      - delayed_off: ${window_close_delay}
+    on_press:
+      - lambda: |-
+          id(heat_was_on_before_window_open) = id(ch_mode_on);
+      - climate.control:
+          id: ch_climate
+          mode: "OFF"
+      - logger.log: "Window opened — heating suspended"
+    on_release:
+      - if:
+          condition:
+            lambda: "return id(heat_was_on_before_window_open);"
+          then:
+            - climate.control:
+                id: ch_climate
+                mode: "HEAT"
+            - logger.log: "Window closed — heating resumed"
+          else:
+            - logger.log: "Window closed — heating was already off, leaving it off"
 
 one_wire:
   - platform: gpio

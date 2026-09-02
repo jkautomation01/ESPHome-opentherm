@@ -309,9 +309,12 @@ tied to real entity state, not decorative.
   over the first couple of weeks, and lower `design_flow_temp` if the
   boiler condenses reliably — lower flow temps at the same comfort level
   is the actual gas saving.
-- A window/door cutoff is pre-written but commented out in the firmware
-  (search for "window/door cutoff" in `opentherm-thermostat.yaml`) — needs
-  a `binary_sensor.*` entity ID filled in and uncommenting.
+- Window/door cutoff: suspends heating while `window_sensor_entity_id`
+  reads open, and resumes it on close — but only if heating was actually
+  on right before the window opened, so a deliberate manual Off beforehand
+  isn't silently re-enabled. `window_open_delay`/`window_close_delay`
+  (defaults 10s/30s) debounce brief contact glitches and someone airing a
+  room out. Search "Window/door cutoff" in `opentherm-thermostat.yaml`.
 - The built-in Preheat Schedule follows `opentherm_schedule.heating_comfort`
   (see "Smart Schedule" below), edited via its card, including per-day
   blocks and as many named preset levels as you want. For one-off
