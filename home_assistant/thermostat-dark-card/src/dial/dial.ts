@@ -49,6 +49,13 @@ export class ThermostatDial extends LitElement implements InteractionHost {
   @property({ type: Object }) _presetIcons?: Record<string, string>;
   @property({ type: String }) status_text: string | null = null;
 
+  // --- OpenTherm project additions: status badges in the preset-icon slot ---
+  @property({ type: Boolean }) show_dhw = false;
+  @property({ type: Boolean }) dhw_active = false;
+  @property({ type: Boolean }) show_window = false;
+  @property({ type: Boolean }) window_open = false;
+  @property({ type: Boolean }) has_problem = false;
+
   // --- Internal state ---
   @state() editing = false;
   private _dragging = false;
@@ -441,11 +448,14 @@ export class ThermostatDial extends LitElement implements InteractionHost {
     return svg`${whole}`;
   }
 
-  // --- SVG Layer: Indicators (leaf, power/thermo) ---
+  // --- SVG Layer: Indicators (badge row — preset/dhw/window/problem — plus power/thermo) ---
   private _renderIndicators(): TemplateResult {
     const r = this._radius;
 
-    // Preset indicator — positioned between center text and power button
+    // Badge row — same slot the upstream card used for a single preset
+    // (leaf) icon, extended to also carry the OpenTherm project's status
+    // badges. Only badges that are actually configured/active take a
+    // slot, and the row stays centered regardless of how many there are.
     const presetIcon = this._getPresetIcon();
     const showPreset =
       !this.editing &&
@@ -454,11 +464,43 @@ export class ThermostatDial extends LitElement implements InteractionHost {
       this.preset_mode !== 'none' &&
       presetIcon !== null;
 
-    const presetClass = `dial-preset${showPreset ? ' dial-preset--visible' : ''}`;
-    const presetScale = r / 5 / 24; // scale MDI 24x24 icons
-    const presetWidth = 24 * presetScale;
-    const presetX = r - presetWidth / 2;
-    const presetY = r + r * 0.32; // below center text, above power
+    const waterBoilerIcon =
+      'M8 2C6.89 2 6 2.89 6 4V16C6 17.11 6.89 18 8 18H9V20H6V22H9C10.11 22 11 21.11 11 20V18H13V20C13 21.11 13.89 22 15 22H18V20H15V18H16C17.11 18 18 17.11 18 16V4C18 2.89 17.11 2 16 2H8M12 4.97A2 2 0 0 1 14 6.97A2 2 0 0 1 12 8.97A2 2 0 0 1 10 6.97A2 2 0 0 1 12 4.97M10 14.5H14V16H10V14.5Z';
+    const windowOpenIcon =
+      'M21 20V2H3V20H1V23H23V20M19 4V11H17V4M5 4H7V11H5M5 20V13H7V20M9 20V4H15V20M17 20V13H19V20Z';
+    const windowClosedIcon =
+      'M21 20V2H3V20H1V23H23V20M19 4V11H13V4M5 4H11V11H5M5 20V13H11V20M13 20V13H19V20Z';
+    const alertCircleIcon =
+      'M13,13H11V7H13M13,17H11V15H13M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2Z';
+
+    type Badge = { icon: string; cls: string; onClick?: (e: MouseEvent) => void };
+    const badges: Badge[] = [];
+    if (showPreset && presetIcon) badges.push({ icon: presetIcon, cls: 'dial-badge--preset' });
+    if (this.show_dhw) {
+      badges.push({
+        icon: waterBoilerIcon,
+        cls: `dial-badge--dhw${this.dhw_active ? ' dial-badge--dhw-active' : ''}`,
+        onClick: (e) => {
+          e.stopPropagation();
+          this.dispatchEvent(new CustomEvent('dhw-toggle', { bubbles: true, composed: true }));
+        },
+      });
+    }
+    if (this.show_window) {
+      badges.push({
+        icon: this.window_open ? windowOpenIcon : windowClosedIcon,
+        cls: `dial-badge--window${this.window_open ? ' dial-badge--window-open' : ''}`,
+      });
+    }
+    if (this.has_problem) {
+      badges.push({ icon: alertCircleIcon, cls: 'dial-badge--problem' });
+    }
+
+    const badgeScale = r / 6 / 24; // scale MDI 24x24 icons — smaller than the old single-icon slot to fit a row
+    const badgeWidth = 24 * badgeScale;
+    const badgeGap = badgeWidth * 0.5;
+    const rowWidth = badges.length * badgeWidth + Math.max(0, badges.length - 1) * badgeGap;
+    const badgeY = r + r * 0.32; // below center text, above power
 
     // Power icon — positioned on the outer ring area (bottom center)
     const powerScale = r / 87;
@@ -478,17 +520,32 @@ export class ThermostatDial extends LitElement implements InteractionHost {
 
     return svg`
       <g>
-        ${
-          presetIcon !== null
-            ? svg`
-          <path
-            d=${presetIcon}
-            class=${presetClass}
-            transform="translate(${presetX}, ${presetY}) scale(${presetScale})"
-          />
-        `
-            : ''
-        }
+        ${badges.map((badge, idx) => {
+          const x = r - rowWidth / 2 + idx * (badgeWidth + badgeGap);
+          const icon = svg`
+            <path
+              d=${badge.icon}
+              class="dial-badge ${badge.cls}"
+              transform="translate(${x}, ${badgeY}) scale(${badgeScale})"
+            />
+          `;
+          if (!badge.onClick) return icon;
+          // Wrap tappable badges (dhw) with an invisible padded hit area,
+          // same pattern as the power toggle below.
+          const pad = badgeWidth * 0.3;
+          return svg`
+            <g class="dial-badge-tap" @click=${badge.onClick}>
+              <rect
+                x=${x - pad}
+                y=${badgeY - pad}
+                width=${badgeWidth + pad * 2}
+                height=${badgeWidth + pad * 2}
+                fill="transparent"
+              />
+              ${icon}
+            </g>
+          `;
+        })}
         ${
           this.show_power_toggle
             ? svg`
@@ -615,7 +672,8 @@ export class ThermostatDial extends LitElement implements InteractionHost {
       return;
     }
     const target = e.target as SVGElement;
-    if (target.closest('.dial-power') || target.closest('.dial-chevron')) return;
+    if (target.closest('.dial-power') || target.closest('.dial-chevron') || target.closest('.dial-badge-tap'))
+      return;
     if (!this.editing) {
       this._interaction.enterEditMode();
     }

@@ -21,9 +21,15 @@ project with a row of status badges and a mode-select row below the dial:
   project's Operation Mode is its own `select` entity, not a climate
   preset.
 
+All three render *inside the dial itself*, in the same slot the upstream
+card uses for its single preset (leaf) icon — as a row that also includes
+the preset icon when one applies, always centered regardless of how many
+of the four are present. This mirrors the upstream card's own convention
+rather than adding a separate strip of badges below the dial.
+
 Everything else — the dial, drag-to-set, dark/light/glassy/transparent
-themes, preset icon, power toggle — is unmodified upstream behavior. See
-the [upstream README](https://github.com/ciotlosm/lovelace-thermostat-dark-card#readme)
+themes, power toggle — is unmodified upstream behavior. See the
+[upstream README](https://github.com/ciotlosm/lovelace-thermostat-dark-card#readme)
 for the full base config reference (`theme`, `step`, `pending`,
 `show_ticks`, `colors`, `status_entity`, `ambient_temperature`, etc.).
 

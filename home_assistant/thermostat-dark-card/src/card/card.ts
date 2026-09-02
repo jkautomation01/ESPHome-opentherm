@@ -155,6 +155,13 @@ export class ThermostatDarkCard extends LitElement {
         ? ''
         : (this._config.name ?? (attrs.friendly_name as string) ?? '');
 
+    const cfg = this._config;
+    const showDhw = !!cfg.dhw_entity;
+    const dhwActive = showDhw && this._isOn(cfg.dhw_entity as string);
+    const showWindow = !!cfg.window_entity;
+    const windowOpen = showWindow && this._isOn(cfg.window_entity as string);
+    const hasProblem = (cfg.problem_entities ?? []).some((id) => this._isOn(id));
+
     return html`
       <ha-card>
         ${name ? html`<div class="card-title">${name}</div>` : ''}
@@ -182,55 +189,18 @@ export class ThermostatDarkCard extends LitElement {
           .colors=${this._config.colors}
           ._presetIcons=${this._config.preset_icons}
           .status_text=${this._resolveStatusText()}
+          .show_dhw=${showDhw}
+          .dhw_active=${dhwActive}
+          .show_window=${showWindow}
+          .window_open=${windowOpen}
+          .has_problem=${hasProblem}
           @temperature-changed=${this._handleTemperatureChanged}
           @toggle=${this._handleToggle}
+          @dhw-toggle=${this._handleDhwClick}
           @more-info=${this._handleMoreInfo}
         ></opentherm-thermostat-dial>
-        ${this._renderBadges()}
         ${this._renderModeChips()}
       </ha-card>
-    `;
-  }
-
-  // --- Badges row: hot water / window / problem, below the dial ---
-  private _renderBadges(): TemplateResult | string {
-    const cfg = this._config;
-    if (!cfg.dhw_entity && !cfg.window_entity && !(cfg.problem_entities?.length)) return '';
-
-    const dhwOn = cfg.dhw_entity ? this._isOn(cfg.dhw_entity) : false;
-    const windowOpen = cfg.window_entity ? this._isOn(cfg.window_entity) : false;
-    const hasProblem = (cfg.problem_entities ?? []).some((id) => this._isOn(id));
-
-    return html`
-      <div class="badges">
-        ${
-          cfg.dhw_entity
-            ? html`
-          <div class="badge ${dhwOn ? 'badge--active' : ''}" @click=${this._handleDhwClick} title="Hot water">
-            <ha-icon icon="mdi:water-boiler"></ha-icon>
-          </div>
-        `
-            : ''
-        }
-        ${
-          cfg.window_entity
-            ? html`
-          <div class="badge ${windowOpen ? 'badge--warn' : ''}" title="Window">
-            <ha-icon icon=${windowOpen ? 'mdi:window-open-variant' : 'mdi:window-closed-variant'}></ha-icon>
-          </div>
-        `
-            : ''
-        }
-        ${
-          hasProblem
-            ? html`
-          <div class="badge badge--error" title="Problem detected">
-            <ha-icon icon="mdi:alert-circle"></ha-icon>
-          </div>
-        `
-            : ''
-        }
-      </div>
     `;
   }
 
@@ -247,7 +217,7 @@ export class ThermostatDarkCard extends LitElement {
     return this.hass.states[entityId]?.state === 'on';
   }
 
-  // --- Mode chips row: options from mode_select_entity, below badges ---
+  // --- Mode chips row: options from mode_select_entity, below the dial ---
   private _renderModeChips(): TemplateResult | string {
     const cfg = this._config;
     if (!cfg.mode_select_entity) return '';
@@ -345,41 +315,6 @@ export class ThermostatDarkCard extends LitElement {
       .warning {
         padding: 16px;
         color: var(--error-color);
-      }
-
-      /* --- Badges row: hot water / window / problem --- */
-      .badges {
-        display: flex;
-        justify-content: center;
-        gap: 12px;
-        margin-top: 12px;
-      }
-      .badge {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        width: 36px;
-        height: 36px;
-        border-radius: 50%;
-        background: var(--secondary-background-color, #2a2a2a);
-        color: var(--secondary-text-color, #888);
-        transition: background 0.2s ease, color 0.2s ease;
-      }
-      .badge ha-icon {
-        --mdc-icon-size: 18px;
-      }
-      .badge--active {
-        background: color-mix(in srgb, #29b6f6 25%, var(--secondary-background-color, #2a2a2a));
-        color: #29b6f6;
-        cursor: pointer;
-      }
-      .badge--warn {
-        background: color-mix(in srgb, #ffa726 25%, var(--secondary-background-color, #2a2a2a));
-        color: #ffa726;
-      }
-      .badge--error {
-        background: color-mix(in srgb, #f44336 25%, var(--secondary-background-color, #2a2a2a));
-        color: #f44336;
       }
 
       /* --- Mode chips row --- */

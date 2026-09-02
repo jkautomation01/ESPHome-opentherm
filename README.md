@@ -238,11 +238,13 @@ and switch between them).
 `home_assistant/www/opentherm-thermostat-dial-card.js` is a fork of
 [thermostat-dark-card](https://github.com/ciotlosm/lovelace-thermostat-dark-card)
 (MIT, Marius Ciotlos) — a polished round-dial thermostat card with
-dark/light/glassy/transparent themes — extended with a badges row (hot
-water, window/door, boiler problem) and a mode-chips row (Normal/Eco/Away/
-Holiday) below the dial. Source and build instructions live in
-`home_assistant/thermostat-dark-card/`; the committed `dist` build in
-`www/` means installing it needs no Node/npm, same as the other card:
+dark/light/glassy/transparent themes — extended with status badges (hot
+water, window/door, boiler problem) rendered *inside the dial*, in the
+same slot the upstream card uses for its preset icon, plus a mode-chips
+row (Normal/Eco/Away/Holiday) below the dial. Source and build
+instructions live in `home_assistant/thermostat-dark-card/`; the
+committed `dist` build in `www/` means installing it needs no Node/npm,
+same as the other card:
 
 1. Copy `home_assistant/www/opentherm-thermostat-dial-card.js` into your
    Home Assistant `config/www/` folder (create it if it doesn't exist).
@@ -269,8 +271,8 @@ Holiday) below the dial. Source and build instructions live in
        - binary_sensor.opentherm_thermostat_air_pressure_fault
        - binary_sensor.opentherm_thermostat_water_overtemperature
    ```
-   Only `entity` is required — the badges row and mode-chips row each
-   simply don't render without their entities configured. See
+   Only `entity` is required — each badge and the mode-chips row simply
+   don't render without their entities configured. See
    `home_assistant/thermostat-dark-card/README.md` for the full option
    list, including all the unmodified upstream dial options (`step`,
    `pending`, `show_ticks`, `colors`, `status_entity`,
@@ -278,7 +280,8 @@ Holiday) below the dial. Source and build instructions live in
 
 The problem badge only appears at all while one of `problem_entities` is
 actually `on`; the hot water and window badges are always shown once
-configured, changing color/icon with state. Mode chips call
+configured, changing color/icon with state (tap the hot water badge to
+toggle it, if `dhw_entity` is a `switch`). Mode chips call
 `select.select_option` on tap.
 
 ### opentherm-thermostat-card (original, alternative)

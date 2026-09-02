@@ -161,14 +161,33 @@ export const dialStyles = css`
     stroke: white;
   }
 
-  /* Indicators */
-  .dial-preset {
-    fill: var(--dial-leaf-color);
-    opacity: 0;
-    transition: opacity 0.5s ease;
+  /* Indicators: badge row (preset + OpenTherm project's dhw/window/problem) */
+  .dial-badge {
+    transition: fill 0.3s ease, opacity 0.3s ease;
   }
-  .dial-preset--visible {
-    opacity: 1;
+  .dial-badge--preset {
+    fill: var(--dial-leaf-color);
+  }
+  .dial-badge--dhw {
+    fill: var(--dial-toggle-color);
+  }
+  .dial-badge--dhw-active {
+    fill: #29b6f6;
+  }
+  .dial-badge--window {
+    fill: var(--dial-toggle-color);
+  }
+  .dial-badge--window-open {
+    fill: #ffa726;
+  }
+  .dial-badge--problem {
+    fill: #f44336;
+  }
+  .dial-badge-tap {
+    cursor: pointer;
+  }
+  .dial-badge-tap:hover .dial-badge {
+    opacity: 0.8;
   }
 
   .dial-power {
